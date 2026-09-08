@@ -118,12 +118,19 @@ pub enum Error {
     /// The call needs a credential and this handle holds none.
     ///
     /// The only failure here the node never saw, and deliberately so. It is
-    /// raised by
+    /// raised by the two calls that need a password rather than merely an
+    /// identity.
+    ///
     /// [`Operations::change_password`](crate::Operations::change_password),
     /// whose request body **is** the new password: sending it to a route that
     /// will certainly answer `401` would put a secret on the wire — in the
     /// clear, since this client terminates no TLS — on an exchange that cannot
     /// succeed.
+    ///
+    /// [`Operations::open_session`](crate::Operations::open_session), which
+    /// exists to spend a password once and hold something cheaper instead.
+    /// A handle with no password has nothing to spend, and the route refuses a
+    /// token by design.
     ///
     /// So the refusal happens before the socket opens. It is reported as itself
     /// rather than as a fabricated `401`, because a client inventing an answer

@@ -127,6 +127,7 @@ A TessariDB node serves two surfaces, and **neither one carries everything**:
 | objects and files | — | yes |
 | backup | — | yes |
 | health, readiness, metrics | — | yes |
+| authentication | once per connection | per request, or per session token |
 
 That table makes an HTTP-only client look like the obvious choice: it reaches
 every route. It is the trap. HTTP answers are JSON, which carries **six** types,
@@ -143,6 +144,14 @@ So this SDK uses **both**, and which transport carries an operation is fixed:
 - **statements and subscriptions → the wire protocol**, for type fidelity;
 - **objects, files, backup, health, readiness, metrics → HTTP**, because nothing
   else serves them.
+
+The authentication row is the one asymmetry worth knowing before writing any HTTP
+code. A wire connection proves who it is once and keeps that identity for its
+lifetime. HTTP has no connection to keep it on, so a credential travels with
+every request — and the node verifies a password with Argon2id at the OWASP
+floor, deliberately, every time. Call `open_session()` and the handle spends the
+password once and presents a token afterwards; skip it and every call is correct
+and an order of magnitude slower, with nothing at the call site to say why.
 
 You never choose a transport per call. But the two connections stay separately
 configurable and separately reportable, because they are two ports: a firewall

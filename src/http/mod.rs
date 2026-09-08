@@ -65,6 +65,7 @@ use crate::http::reply::Reply;
 pub struct Operations {
     address: String,
     credential: Option<Credential>,
+    session: Option<String>,
     attempts: u8,
 }
 
@@ -82,6 +83,27 @@ pub struct Operations {
 struct Credential {
     name: String,
     header: String,
+}
+
+/// Which credential a request presents.
+///
+/// Two routes — `POST /session` and `POST /password` — **refuse a token** by
+/// design, and both of them are reachable from a handle that is holding one. So
+/// the choice cannot be read off the handle's state alone; the route decides it,
+/// and says so here rather than in a comment at each call site.
+#[derive(Clone, Copy)]
+enum Presenting {
+    /// The session token when this handle holds one, and the password otherwise.
+    ///
+    /// This is every route but the two below. Preferring the token is the whole
+    /// point of holding one.
+    Whatever,
+    /// The password, always, even while a session is open.
+    ///
+    /// A token presented to either of the two routes that require this is
+    /// answered `401`, so sending one would turn a working call into a refusal
+    /// that reads like a wrong password.
+    PasswordOnly,
 }
 
 /// How long to wait between attempts.
@@ -115,6 +137,17 @@ impl std::fmt::Debug for Operations {
                     None => &"<none>",
                 },
             )
+            // Reported for the same reason the credential is, and it answers a
+            // different question: *whether a password is being hashed on every
+            // request*. A handle with a credential and no session is correct and
+            // slow, which is the one state that looks fine from the outside.
+            .field(
+                "session",
+                match self.session {
+                    Some(_) => &"<open>",
+                    None => &"<none>",
+                },
+            )
             // Not a secret, and the second thing looked for when a call behaved
             // unexpectedly — a request that took four times as long as expected
             // is explained by this number and by nothing else visible.
@@ -137,6 +170,7 @@ impl Operations {
         Self {
             address: address.into(),
             credential: None,
+            session: None,
             attempts: 1,
         }
     }
@@ -155,16 +189,21 @@ impl Operations {
     /// property holds by construction: the `POST` synonym and the ranged write,
     /// the two calls that would break it, are deliberately not offered.
     ///
-    /// **Two calls are exempt rather than covered**, and they never reach this
+    /// **Three calls are exempt rather than covered**, and they never reach this
     /// loop. [`change_password`](Self::change_password), because a retry there
     /// re-sends a credential the first attempt may already have invalidated.
     /// [`backup`](Self::backup), because its answer is not a value this client
     /// discards and replaces — it has already been written to the caller's sink,
     /// so a second attempt appends a second copy behind the partial first one.
+    /// [`open_session`](Self::open_session), because an answer lost on the way
+    /// back leaves a token nobody holds occupying one of the node's bounded
+    /// slots, and asking again mints a second.
     ///
-    /// The pair is worth reading together: retry safety is a property of each
-    /// call, never of a transport, and these are the two ways a request on an
-    /// otherwise idempotent surface stops having it.
+    /// The three are worth reading together: retry safety is a property of each
+    /// call, never of a transport, and these are the three ways a request on an
+    /// otherwise idempotent surface stops having it — a credential the attempt
+    /// consumed, an answer already delivered elsewhere, and a side effect the
+    /// node keeps whether or not the caller heard about it.
     ///
     /// **Anything the node actually said is not retried.** A `401` retried is a
     /// loop and a `403` retried is a longer one, and `Malformed`, `TooLarge` and
@@ -220,7 +259,150 @@ impl Operations {
             name: name.to_owned(),
             header: basic::header(name, password),
         });
+        // Any session open here belongs to whoever this handle was before. A
+        // token outranks the credential on every ordinary route, so keeping one
+        // would make a handle that says it is Ada still act as Grace — and it
+        // would keep doing so for twelve hours, with the right credential
+        // sitting unused beside it.
+        self.session = None;
         self
+    }
+
+    /// Spend the password once and hold a token instead.
+    ///
+    /// Returns the token's lifetime in **seconds from now**, as the node
+    /// reported it — read from the answer rather than assumed, because it is the
+    /// node's constant and not this client's.
+    ///
+    /// # Why a caller should almost always do this
+    ///
+    /// The node verifies a password with Argon2id at the OWASP floor, and HTTP
+    /// gives it no connection to remember the answer on — so a handle presenting
+    /// `Basic` pays that hash on **every single request**. Measured on a real
+    /// deployment: seventeen statements took 2.5 seconds, of which about 99 %
+    /// was re-verifying a password the caller already held.
+    ///
+    /// Nothing about that failure is visible from the outside. The calls all
+    /// succeed; they are simply slow, and the cause is in the node's hasher
+    /// rather than anywhere a caller would look. That is why this method exists
+    /// and why its documentation is longer than its body.
+    ///
+    /// After it succeeds, every route on this handle presents the token instead
+    /// — except the two that refuse one, which continue to present the password
+    /// and are named below.
+    ///
+    /// # The token is not renewed for you
+    ///
+    /// It lasts twelve hours on the shipped node, and this handle does **not**
+    /// notice when it stops working: a `401` arrives and is reported as a `401`.
+    /// A long-lived caller therefore reopens the session, either on the returned
+    /// lifetime or when a `401` arrives while one is open.
+    ///
+    /// This is a limit rather than a preference. Renewing inside the client
+    /// would mean mutating the handle from the request path, and every read
+    /// method here takes `&self` so that a [`Bucket`] can be cloned off it —
+    /// changing that is a design decision about the whole type, not a detail of
+    /// this call. It is written down here rather than discovered at hour twelve.
+    ///
+    /// # What ends a token
+    ///
+    /// Four things, and the node reports all four as `401` without distinction:
+    /// it expired; [`close_session`](Self::close_session) gave it back; the user
+    /// record changed at all — a password change, a role change, a `DROP USER`;
+    /// or the node restarted, because the table is in memory.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoCredential`] before anything is sent, when this handle
+    /// presents no credential — there is no password to spend.
+    ///
+    /// [`Error::HttpRefused`] at `401` for a wrong password, and also at `401`
+    /// on a store with **no users declared**: such a store signs everyone in as
+    /// nobody and has no session to open. That one is not worth retrying and not
+    /// worth working around — on an open store there is nothing to prove and so
+    /// nothing to save.
+    ///
+    /// [`Error::HttpRefused`] at `503` when the node is already holding as many
+    /// sessions as it will. That one **is** retriable, and a caller that treats
+    /// every failure here as fatal will give up on a node that is merely busy.
+    ///
+    /// [`Error::Malformed`] when the answer carries no `token`.
+    ///
+    /// # This call is not retried
+    ///
+    /// The third exemption from [`attempts`](Self::attempts), for a reason of
+    /// its own: if the request reached the node and the answer was lost on the
+    /// way back, a token now exists that nobody holds, and it occupies one of
+    /// the node's bounded slots until it expires. Asking again from here would
+    /// mint a second. A caller who wants to try again may — the cost is the same
+    /// either way — but it is their decision to take rather than one made
+    /// silently inside a loop.
+    pub async fn open_session(&mut self) -> Result<u64> {
+        if self.credential.is_none() {
+            return Err(Error::NoCredential);
+        }
+        let reply = self
+            .exchange("POST", "/session", None, Presenting::PasswordOnly)
+            .await?;
+        if reply.status != 200 {
+            return Err(refusal(&reply));
+        }
+        let answer: Json = serde_json::from_slice(&reply.body).map_err(|_| Error::Malformed)?;
+        let token = answer
+            .get("token")
+            .and_then(Json::as_str)
+            .ok_or(Error::Malformed)?;
+        // Absent rather than fatal: the lifetime is worth reporting and is not
+        // worth refusing a working token over. A caller reading zero learns the
+        // node did not say, which is the truth.
+        let lifetime = answer
+            .get("expires_in")
+            .and_then(Json::as_u64)
+            .unwrap_or_default();
+        // The header is built once and held, the same way the password's is, so
+        // the token is formatted in one place rather than at each request.
+        self.session = Some(format!("Bearer {token}"));
+        Ok(lifetime)
+    }
+
+    /// Give the token back and go back to presenting the password.
+    ///
+    /// A handle with no session open does nothing and succeeds — there is
+    /// nothing to give back, and nothing a caller would do differently.
+    ///
+    /// **The session is dropped locally whatever the node answers.** A token
+    /// this client has stopped holding is a token it will never present again,
+    /// so keeping it after a failed request would leave the handle carrying a
+    /// credential it has already decided not to use.
+    ///
+    /// The node answers the same whether or not it was holding the token —
+    /// whether one it never issued *exists* is not something the presenter is
+    /// entitled to learn.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::HttpRefused`] at any status other than `200`, and the transport
+    /// errors of any other call. The session is already gone in every case.
+    pub async fn close_session(&mut self) -> Result<()> {
+        if self.session.is_none() {
+            return Ok(());
+        }
+        // The token has to still be held while this is sent — it travels in the
+        // header and it is the only thing the node has to identify what to
+        // forget. Clearing it first would send the password instead, and the
+        // node would answer `200` for a token it still holds.
+        let outcome = self
+            .exchange("DELETE", "/session", None, Presenting::Whatever)
+            .await;
+        // Dropped before the answer is judged, so every path below leaves the
+        // handle in the same state: this client has decided not to present that
+        // token again, and whether the node agreed does not change that.
+        self.session = None;
+        let reply = outcome?;
+        if reply.status != 200 {
+            return Err(refusal(&reply));
+        }
+        Ok(())
     }
 
     /// Change this user's own password, and keep the handle usable.
@@ -240,8 +422,10 @@ impl Operations {
     /// cannot be set through this route, and this client does not pretend
     /// otherwise by escaping it. The current password is re-verified before the
     /// change, so a wrong one is refused rather than quietly accepted. On
-    /// success **every token this user held stops working**, which matters to a
-    /// caller holding one and not at all to this handle, which holds none.
+    /// success **every token this user held stops working**, including one this
+    /// handle is holding — so the session is discarded here rather than left to
+    /// fail on the next call. Reopen it with
+    /// [`open_session`](Self::open_session) if the handle is long-lived.
     ///
     /// # A clone made earlier is not updated
     ///
@@ -290,13 +474,23 @@ impl Operations {
         // reason given above. This is the only caller on the type that reaches
         // past the retry loop, and it is the only one that may.
         let reply = self
-            .exchange("POST", "/password", Some(new.as_bytes()))
+            .exchange(
+                "POST",
+                "/password",
+                Some(new.as_bytes()),
+                Presenting::PasswordOnly,
+            )
             .await?;
         if reply.status != 200 {
             return Err(refusal(&reply));
         }
 
         self.credential = Some(next);
+        // The node ended it the moment the record changed; dropping it here is
+        // what keeps this handle's state and the node's the same. Left in place
+        // it would be presented on the next request and refused, and the `401`
+        // would read as a password change that did not take.
+        self.session = None;
         Ok(())
     }
 
@@ -510,7 +704,9 @@ impl Operations {
     async fn send(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<Reply> {
         let mut made = 1_u8;
         loop {
-            let outcome = self.exchange(method, path, body).await;
+            let outcome = self
+                .exchange(method, path, body, Presenting::Whatever)
+                .await;
             match &outcome {
                 Err(failure) if retryable(failure) && made < self.attempts => {
                     made = made.saturating_add(1);
@@ -527,8 +723,14 @@ impl Operations {
     /// place over a whole exchange. A retry woven into the steps below would have
     /// to decide what a half-written request means, and the answer is that this
     /// connection is finished either way.
-    async fn exchange(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<Reply> {
-        let mut reader = self.open(method, path, body).await?;
+    async fn exchange(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        presenting: Presenting,
+    ) -> Result<Reply> {
+        let mut reader = self.open(method, path, body, presenting).await?;
         // `expects_body` is the method's property, not the response's: a HEAD
         // answers with the `Content-Length` a GET would carry and sends nothing
         // after the headers, so a reader that trusts the header is reading bytes
@@ -557,7 +759,7 @@ impl Operations {
     where
         W: AsyncWrite + Unpin,
     {
-        let mut reader = self.open("GET", path, None).await?;
+        let mut reader = self.open("GET", path, None, Presenting::Whatever).await?;
         reply::read_into(&mut reader, sink).await
     }
 
@@ -567,6 +769,7 @@ impl Operations {
         method: &str,
         path: &str,
         body: Option<&[u8]>,
+        presenting: Presenting,
     ) -> Result<BufReader<TcpStream>> {
         let mut stream = TcpStream::connect(&self.address).await?;
         stream.set_nodelay(true)?;
@@ -583,9 +786,15 @@ impl Operations {
         // `Authorization:` with nothing after it is a header the node must then
         // decide what to make of, and the answer it gives to that is not one
         // this client has measured.
-        let authorization = match &self.credential {
-            Some(held) => format!("Authorization: {}\r\n", held.header),
-            None => String::new(),
+        let authorization = match (presenting, &self.session, &self.credential) {
+            // The token first, because it is the reason it was asked for: the
+            // node verifies a password with Argon2id at the OWASP floor on every
+            // request that carries one, and looks a token up in a map.
+            (Presenting::Whatever, Some(bearer), _) => {
+                format!("Authorization: {bearer}\r\n")
+            }
+            (_, _, Some(held)) => format!("Authorization: {}\r\n", held.header),
+            (_, _, None) => String::new(),
         };
         let request = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\
@@ -715,7 +924,7 @@ mod tests {
     /// claim of [`Operations::change_password`] is about a header changing. A
     /// test that only checked the returned `Result` would pass on a method that
     /// updated nothing, which is the failure being guarded against.
-    async fn recorder(status: u16) -> (String, Arc<Mutex<Vec<String>>>) {
+    async fn recorder(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
         let socket = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a free port for the mock");
@@ -747,7 +956,8 @@ mod tests {
                     .push(String::from_utf8_lossy(&request).into_owned());
 
                 let answer = format!(
-                    "HTTP/1.1 {status} .\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                    "HTTP/1.1 {status} .\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 );
                 let _ = stream.write_all(answer.as_bytes()).await;
                 let _ = stream.flush().await;
@@ -809,7 +1019,7 @@ mod tests {
     async fn the_new_password_is_the_body_and_the_old_credential_signs_for_it() {
         // C1. Two claims about one request, and both are on the wire rather
         // than in the return value.
-        let (address, seen) = recorder(200).await;
+        let (address, seen) = recorder(200, "ok").await;
         let mut handle = Operations::at(&address).as_user("admin", "old");
 
         handle
@@ -839,7 +1049,7 @@ mod tests {
         // C2, the wave's reason for existing. Without this the call succeeds
         // and every later call on the same handle returns 401, with nothing
         // anywhere in an error state at the moment the handle went stale.
-        let (address, seen) = recorder(200).await;
+        let (address, seen) = recorder(200, "ok").await;
         let mut handle = Operations::at(&address).as_user("admin", "old");
 
         handle
@@ -863,7 +1073,7 @@ mod tests {
         // handle that adopted a password the store rejected would fail every
         // later call, and the failure would name the later call rather than
         // this one.
-        let (address, seen) = recorder(401).await;
+        let (address, seen) = recorder(401, "ok").await;
         let mut handle = Operations::at(&address).as_user("admin", "old");
 
         let refused = handle
@@ -1291,6 +1501,230 @@ mod tests {
             "sending no credential is the most likely cause of a 401, so the \
              output has to distinguish it from a credential it declined to \
              print; got {shown}"
+        );
+    }
+
+    /// The `n`th request the recorder kept.
+    ///
+    /// `sent[n]` would be the obvious spelling and this crate denies indexing
+    /// everywhere, tests included — a panic inside an assertion reports a
+    /// missing request as a crash rather than as the failure it is.
+    fn nth(sent: &[String], n: usize) -> &str {
+        sent.get(n).map_or_else(
+            || panic!("the mock never recorded request {n}"),
+            String::as_str,
+        )
+    }
+
+    /// The answer `POST /session` gives, as the node writes it.
+    const MINTED: &str = r#"{"token":"3f1c","expires_in":43200}"#;
+
+    #[tokio::test]
+    async fn opening_a_session_spends_the_password_and_then_stops_sending_it() {
+        // The whole reason the method exists, and neither half is visible in the
+        // return value: the *first* request must carry the password, and every
+        // request after it must carry the token instead. A method that stored
+        // the token and went on presenting Basic would return `Ok(43200)` and
+        // change nothing a caller could measure except the latency.
+        let (address, seen) = recorder(200, MINTED).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        let lifetime = handle
+            .open_session()
+            .await
+            .expect("the mock answers the shape the node answers");
+        assert_eq!(lifetime, 43_200, "read from the answer, not assumed");
+
+        let _ = handle.health().await;
+
+        let sent = seen.lock().expect("the mock's record");
+        assert_eq!(sent.len(), 2, "one exchange to open, one to use it");
+        assert!(
+            nth(&sent, 0).starts_with("POST /session "),
+            "the password is spent on /session; got {}",
+            nth(&sent, 0).lines().next().unwrap_or_default()
+        );
+        assert!(
+            nth(&sent, 0).contains(&format!("Authorization: {OLD}\r\n")),
+            "the route refuses a token, so this one carries the password"
+        );
+        assert!(
+            nth(&sent, 1).contains("Authorization: Bearer 3f1c\r\n"),
+            "every later request carries the token; got {}",
+            nth(&sent, 1)
+        );
+        assert!(
+            !nth(&sent, 1).contains("Basic"),
+            "and stops carrying the password — that saving is the point"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_is_never_offered_to_the_two_routes_that_refuse_one() {
+        // `POST /session` and `POST /password` answer `401` to a token by
+        // design. A handle that presented the token it is holding would turn a
+        // working call into a refusal that reads exactly like a wrong password,
+        // which is the most expensive way to be wrong here.
+        let (address, seen) = recorder(200, MINTED).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        handle.open_session().await.expect("a token to hold");
+        // A second open, now while one is held, and a password change after it.
+        handle.open_session().await.expect("another token");
+        handle
+            .change_password("new")
+            .await
+            .expect("the mock answers 200");
+
+        let sent = seen.lock().expect("the mock's record");
+        for request in sent.iter() {
+            let line = request.lines().next().unwrap_or_default();
+            assert!(
+                request.contains("Authorization: Basic "),
+                "both refusing routes take the password; {line} did not"
+            );
+            assert!(
+                !request.contains("Bearer"),
+                "and must not be handed a token; {line} was"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_password_change_drops_the_session_the_node_has_already_ended() {
+        // The node ends every token the user held the moment the record
+        // changes. A handle that kept its own would present it on the next call
+        // and read the `401` as a password change that did not take — the
+        // failure is a mis-diagnosis rather than a lost request.
+        let (address, seen) = recorder(200, MINTED).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        handle.open_session().await.expect("a token to hold");
+        handle
+            .change_password("new")
+            .await
+            .expect("the mock answers 200");
+        let _ = handle.health().await;
+
+        let sent = seen.lock().expect("the mock's record");
+        let last = sent.last().expect("three requests were made");
+        assert!(
+            last.contains(&format!("Authorization: {NEW}\r\n")),
+            "back to the new password, with no token in sight; got {last}"
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_a_session_hands_the_token_back_before_forgetting_it() {
+        // The token travels in the header and is the only thing naming what the
+        // node should forget. Clearing it locally first would send the password
+        // instead, and the node would answer `200` for a token it still holds —
+        // a leak that looks exactly like a success.
+        let (address, seen) = recorder(200, MINTED).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        handle.open_session().await.expect("a token to hold");
+        handle.close_session().await.expect("the mock answers 200");
+        let _ = handle.health().await;
+
+        let sent = seen.lock().expect("the mock's record");
+        assert!(
+            nth(&sent, 1).starts_with("DELETE /session "),
+            "given back on the route that takes it"
+        );
+        assert!(
+            nth(&sent, 1).contains("Authorization: Bearer 3f1c\r\n"),
+            "carrying the token, which is what the node forgets by; got {}",
+            nth(&sent, 1)
+        );
+        assert!(
+            nth(&sent, 2).contains(&format!("Authorization: {OLD}\r\n")),
+            "and afterwards the handle is back on the password"
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_a_session_nobody_opened_opens_no_connection() {
+        // There is nothing to give back and nothing a caller would do
+        // differently, so this succeeds without a request. Counted rather than
+        // asserted on the result, because `Ok(())` says nothing about whether a
+        // pointless exchange happened.
+        let (address, seen) = listener(0, 200).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        handle
+            .close_session()
+            .await
+            .expect("no session is not a failure");
+
+        assert_eq!(seen.load(Ordering::SeqCst), 0, "nothing to send");
+    }
+
+    #[tokio::test]
+    async fn opening_a_session_without_a_password_opens_no_connection() {
+        // The same shape as the password-change refusal: the route exists to
+        // spend a password, a handle with none has nothing to spend, and the
+        // refusal is reported as itself rather than as a `401` this client
+        // invented about a node it never reached.
+        let (address, seen) = listener(0, 200).await;
+        let mut handle = Operations::at(&address);
+
+        let refused = handle
+            .open_session()
+            .await
+            .expect_err("there is no password to spend");
+
+        assert!(
+            matches!(refused, Error::NoCredential),
+            "reported as itself; got {refused:?}"
+        );
+        assert_eq!(seen.load(Ordering::SeqCst), 0, "nothing may be sent");
+    }
+
+    #[tokio::test]
+    async fn an_answer_with_no_token_in_it_is_malformed_and_leaves_no_session() {
+        // A `200` whose body is not the documented shape must not leave the
+        // handle believing it holds something. The failure to guard against is
+        // storing `Bearer null` and presenting it for twelve hours.
+        let (address, seen) = recorder(200, r#"{"expires_in":43200}"#).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+
+        let refused = handle
+            .open_session()
+            .await
+            .expect_err("no token field, no session");
+        assert!(
+            matches!(refused, Error::Malformed),
+            "the body is not the shape the route promises; got {refused:?}"
+        );
+
+        let _ = handle.health().await;
+        let sent = seen.lock().expect("the mock's record");
+        assert!(
+            nth(&sent, 1).contains(&format!("Authorization: {OLD}\r\n")),
+            "still on the password, holding nothing; got {}",
+            nth(&sent, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_in_as_somebody_else_does_not_keep_the_first_ones_token() {
+        // A token outranks the credential on every ordinary route, so a handle
+        // that kept one across `as_user` would say it is one user and act as
+        // another — for twelve hours, with the right credential sitting unused
+        // beside it.
+        let (address, seen) = recorder(200, MINTED).await;
+        let mut handle = Operations::at(&address).as_user("admin", "old");
+        handle.open_session().await.expect("a token to hold");
+
+        let handle = handle.as_user("admin", "new");
+        let _ = handle.health().await;
+
+        let sent = seen.lock().expect("the mock's record");
+        let last = sent.last().expect("two requests were made");
+        assert!(
+            last.contains(&format!("Authorization: {NEW}\r\n")),
+            "the new identity's password, not the old identity's token; got {last}"
         );
     }
 }

@@ -24,8 +24,17 @@
 //! types — and nothing at the call site would show what was lost.
 //!
 //! The wire half is [`Client`]. The HTTP half begins at [`Operations`], which
-//! currently reaches the operational routes; the object and file surface is not
-//! written yet.
+//! reaches the operational routes, the backup route, and — through
+//! [`Bucket`] — the object and file surface.
+//!
+//! # Open a session before making many HTTP calls
+//!
+//! HTTP has no connection for a node to remember an identity on, so a handle
+//! presenting a password presents it on **every request**, and the node verifies
+//! it with Argon2id at the OWASP floor every time.
+//! [`Operations::open_session`] spends the password once and holds a token
+//! instead. Skipping it is correct and slow, and nothing about the slowness
+//! points at its cause — which is the only reason it is mentioned this early.
 //!
 //! # There is no TLS on this protocol
 //!
