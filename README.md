@@ -4,11 +4,11 @@
 
 # TessariDB — Rust SDK
 
-**The Rust client for [TessariDB](https://github.com/TessariDB/TessariDB).**
+**The Rust client for [TessariDB](https://github.com/TessariDB/tessaridb).**
 
 [![status](https://img.shields.io/badge/status-in%20development-D98E33?style=flat-square)](#status)
 [![licence](https://img.shields.io/badge/licence-Apache--2.0-6B5FD1?style=flat-square)](LICENSE)
-[![protocol](https://img.shields.io/badge/protocol-v1.0-6B5FD1?style=flat-square)](https://github.com/TessariDB/TessariDB-protocol)
+[![protocol](https://img.shields.io/badge/protocol-v1.0-6B5FD1?style=flat-square)](https://github.com/TessariDB/tessaridb-protocol)
 
 </div>
 
@@ -19,7 +19,7 @@
 
 ```toml
 [dependencies]
-tessaridb-client = { git = "https://github.com/TessariDB/TessariDB-sdk-rust" }
+tessaridb-client = { git = "https://github.com/TessariDB/tessaridb-sdk-rust" }
 ```
 
 The crate is `tessaridb-client`, not `tessaridb`: the plain name belongs to the
@@ -240,7 +240,7 @@ builder against it, and `cargo test --test node -- --ignored` additionally
 parser, and the reason a builder in Python or Go will render exactly what this
 one does.
 
-[contract]: https://github.com/TessariDB/TessariDB-protocol/blob/main/spec/query-builder-v1.md
+[contract]: https://github.com/TessariDB/tessaridb-protocol/blob/main/spec/query-builder-v1.md
 
 ## Branches
 
