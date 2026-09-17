@@ -199,6 +199,24 @@ let q = Select::from("users")
     .limit(50);
 ```
 
+**On a cluster, two more clauses say which node may answer** rather than what the
+answer holds:
+
+```rust
+let q = Select::from("orders")
+    .staleness("30s")             // no node further behind than this may answer
+    .answered_by(Answerer::Leader); // and it must be where writes are decided
+
+// SELECT * FROM orders STALENESS 30s ANSWERED BY LEADER;
+```
+
+They are separate controls rather than one: a follower at zero lag is *level*,
+not authoritative. The answerer is an enumeration, so the wrong word does not
+compile; the span is a string because its **text** is the contract — `1m30s` and
+`90s` are the same length and different statements. A bound tighter than the
+cluster can know about itself is refused **by the node**, whose message names the
+floor, so this client checks a span's shape and never its value.
+
 **A long text field can come back a window at a time** rather than whole:
 
 ```rust
