@@ -42,21 +42,35 @@ the application you build with this crate.
 
 ---
 
+## Versions, and what actually has to match
+
+This client's version is **its own** and never tracks the engine's. A fix here
+would otherwise force an invented engine release, and an engine release would
+force five invented client releases.
+
+What has to match is the **protocol**. This release speaks **protocol 1.1** and
+connects to any node of protocol **major 1**, which is checked in the greeting
+before anything else is sent — a differing major is refused there rather than
+discovered mid-conversation, where it arrives as a decode failure that reads
+like corruption. A differing *minor* is not a refusal: the peer's minor is
+reported so a caller can decline to send what an older node cannot read.
+
+
 ## Status
 
-**Stage: active development · early · not published to crates.io.**
+**Stage: active development · on crates.io as `tessaridb-client`.**
 
 - ✅ **Runs:** the wire half — connect, run statements with bound parameters,
   decode every value type, subscribe to changes, and build the four common
-  statements.
-- ✅ **Runs:** part of the HTTP half — health, readiness, metrics, and writing,
-  reading and deleting a file in a bucket.
-- 🚧 **Next:** the rest of the HTTP half — the bucket listing, backup, and
-  credentials.
+  statements, including `STALENESS` and `ANSWERED BY`.
+- ✅ **Runs:** the HTTP half — health, readiness, metrics, sessions, credentials,
+  backup, and writing, sizing, reading and deleting a file in a bucket.
+- 🚧 **Next:** the bucket listing, the one `/files` route this client does not
+  offer yet.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
   talks to is pre-1.0.
 
-It implements **protocol 1.0**: a two-number version where only a differing
+It implements **protocol 1.1**: a two-number version where only a differing
 major is a refusal, and an outcome kind this build has never seen is stepped over
 by its length rather than ending the read.
 
