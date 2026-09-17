@@ -90,6 +90,98 @@ pub enum BuildError {
         /// What is missing.
         what: &'static str,
     },
+
+    /// A staleness bound that is not a span.
+    ///
+    /// A span is written into the statement TEXT rather than bound — a node
+    /// refuses a parameter in that position — so this check is what keeps the
+    /// contract's guarantee true for the one clause that carries a caller's
+    /// characters into a script.
+    #[error(
+        "{name:?} is not a span: write digits and one of ns, us, ms, s, m, h, d, w, as in `30s`"
+    )]
+    NotASpan {
+        /// What was supplied.
+        name: String,
+    },
+
+    /// A word in `ANSWERED BY` that is neither `ANY` nor `LEADER`.
+    #[error("{name:?} is not an answerer: write ANY or LEADER")]
+    NotAnAnswerer {
+        /// What was supplied.
+        name: String,
+    },
+}
+
+/// Where a read's answer must come from.
+///
+/// An enumeration rather than a string because the contract asks for one where
+/// the language has them: it makes the refusal unrepresentable for a caller who
+/// writes Rust, and leaves [`TryFrom`] as the one door a string comes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answerer {
+    /// Any copy may answer. What a read means when it says nothing.
+    Any,
+    /// Only the node that decides writes for these records.
+    Leader,
+}
+
+impl Answerer {
+    /// The word as the statement spells it.
+    #[must_use]
+    pub const fn spelled(self) -> &'static str {
+        match self {
+            Self::Any => "ANY",
+            Self::Leader => "LEADER",
+        }
+    }
+}
+
+impl TryFrom<&str> for Answerer {
+    type Error = BuildError;
+
+    /// The direction a guess would fail in is the unsafe one: somebody writing
+    /// `MASTER` means the leader, and admitting an unrecognised word would have
+    /// the read answered by whichever copy came first.
+    fn try_from(word: &str) -> Result<Self, BuildError> {
+        match word {
+            "ANY" => Ok(Self::Any),
+            "LEADER" => Ok(Self::Leader),
+            _ => Err(BuildError::NotAnAnswerer {
+                name: word.to_owned(),
+            }),
+        }
+    }
+}
+
+/// The node's own eight units, longest first so `ms` is read before `m`.
+const SPAN_UNITS: [&str; 8] = ["ms", "ns", "us", "s", "m", "h", "d", "w"];
+
+/// `span ::= 1*( 1*DIGIT unit )`.
+///
+/// The VALUE is never judged here. A bound tighter than the cluster's floor is
+/// the node's refusal to make and its message names the floor; a client that
+/// guessed it would be wrong on the next cluster.
+pub(crate) fn check_span(bound: &str) -> Result<(), BuildError> {
+    let refused = || BuildError::NotASpan {
+        name: bound.to_owned(),
+    };
+    let mut rest = bound;
+    let mut seen = false;
+    while !rest.is_empty() {
+        let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        if after_digits.len() == rest.len() {
+            return Err(refused());
+        }
+        rest = after_digits;
+        let unit = SPAN_UNITS
+            .iter()
+            .find(|unit| rest.starts_with(*unit))
+            .ok_or_else(refused)?;
+        rest = &rest[unit.len()..];
+        seen = true;
+    }
+    if seen { Ok(()) } else { Err(refused()) }
 }
 
 /// Whether a string may be interpolated into a statement as a name.

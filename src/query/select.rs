@@ -1,6 +1,6 @@
 //! Reading.
 
-use crate::query::{Binder, BuildError, Filter, Query, check_name};
+use crate::query::{Answerer, Binder, BuildError, Filter, Query, check_name, check_span};
 
 /// Which way an ordering runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,8 @@ pub struct Select {
     order: Vec<(String, Order)>,
     start: Option<u64>,
     limit: Option<u64>,
+    staleness: Option<String>,
+    answered_by: Option<Answerer>,
 }
 
 impl Select {
@@ -93,6 +95,8 @@ impl Select {
             order: Vec::new(),
             start: None,
             limit: None,
+            staleness: None,
+            answered_by: None,
         }
     }
 
@@ -172,6 +176,33 @@ impl Select {
         self
     }
 
+    /// How far behind the node answering this read may be — `"30s"`, `"1m30s"`.
+    ///
+    /// A candidate filter and never a marker: it says which nodes may answer at
+    /// all, rather than labelling an answer as stale. A read no node can satisfy
+    /// is refused by the node rather than quietly promoted to the one that can.
+    ///
+    /// A string rather than a [`Duration`](std::time::Duration) because the text
+    /// is the contract: `1m30s` and `90s` are the same length and different
+    /// statements, and a client that normalised one into the other would render
+    /// something the shared corpus does not carry.
+    #[must_use]
+    pub fn staleness(mut self, bound: impl Into<String>) -> Self {
+        self.staleness = Some(bound.into());
+        self
+    }
+
+    /// Where the answer must come from.
+    ///
+    /// Not a tighter [`staleness`](Self::staleness): a follower at zero lag is
+    /// *level*, not authoritative, so no freshness bound expresses *this must
+    /// come from where writes are decided*.
+    #[must_use]
+    pub const fn answered_by(mut self, answerer: Answerer) -> Self {
+        self.answered_by = Some(answerer);
+        self
+    }
+
     /// Render the statement and its parameters.
     pub fn build(&self) -> Result<Query, BuildError> {
         check_name("a table", &self.source)?;
@@ -218,6 +249,18 @@ impl Select {
         if let Some(count) = self.limit {
             script.push_str(" LIMIT ");
             script.push_str(&count.to_string());
+        }
+
+        // Both come after `LIMIT`, and `STALENESS` before `ANSWERED BY`, because
+        // a node's parser accepts no other sequence.
+        if let Some(bound) = &self.staleness {
+            check_span(bound)?;
+            script.push_str(" STALENESS ");
+            script.push_str(bound);
+        }
+        if let Some(answerer) = self.answered_by {
+            script.push_str(" ANSWERED BY ");
+            script.push_str(answerer.spelled());
         }
 
         script.push(';');

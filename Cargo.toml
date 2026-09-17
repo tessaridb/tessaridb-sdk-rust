@@ -1,12 +1,11 @@
 [package]
 name = "tessaridb-client"
-version = "0.0.3-alpha"
+version = "0.0.5-alpha"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
 description = "Async client for TessariDB"
-repository = "https://github.com/TessariDB/TessariDB-sdk-rust"
-publish = false
+repository = "https://github.com/tessaridb/tessaridb-sdk-rust"
 
 [dependencies]
 # The runtime is a declared dependency, not an incidental one (ADR-SDK-0003).

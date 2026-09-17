@@ -4,11 +4,11 @@
 
 # TessariDB — Rust SDK
 
-**The Rust client for [TessariDB](https://github.com/TessariDB/TessariDB).**
+**The Rust client for [TessariDB](https://github.com/tessaridb/tessaridb).**
 
 [![status](https://img.shields.io/badge/status-in%20development-D98E33?style=flat-square)](#status)
 [![licence](https://img.shields.io/badge/licence-Apache--2.0-6B5FD1?style=flat-square)](LICENSE)
-[![protocol](https://img.shields.io/badge/protocol-v1.0-6B5FD1?style=flat-square)](https://github.com/TessariDB/TessariDB-protocol)
+[![protocol](https://img.shields.io/badge/protocol-v1.0-6B5FD1?style=flat-square)](https://github.com/tessaridb/tessaridb-protocol)
 
 </div>
 
@@ -19,7 +19,7 @@
 
 ```toml
 [dependencies]
-tessaridb-client = { git = "https://github.com/TessariDB/TessariDB-sdk-rust" }
+tessaridb-client = { git = "https://github.com/tessaridb/tessaridb-sdk-rust" }
 ```
 
 The crate is `tessaridb-client`, not `tessaridb`: the plain name belongs to the
@@ -127,6 +127,7 @@ A TessariDB node serves two surfaces, and **neither one carries everything**:
 | objects and files | — | yes |
 | backup | — | yes |
 | health, readiness, metrics | — | yes |
+| authentication | once per connection | per request, or per session token |
 
 That table makes an HTTP-only client look like the obvious choice: it reaches
 every route. It is the trap. HTTP answers are JSON, which carries **six** types,
@@ -143,6 +144,14 @@ So this SDK uses **both**, and which transport carries an operation is fixed:
 - **statements and subscriptions → the wire protocol**, for type fidelity;
 - **objects, files, backup, health, readiness, metrics → HTTP**, because nothing
   else serves them.
+
+The authentication row is the one asymmetry worth knowing before writing any HTTP
+code. A wire connection proves who it is once and keeps that identity for its
+lifetime. HTTP has no connection to keep it on, so a credential travels with
+every request — and the node verifies a password with Argon2id at the OWASP
+floor, deliberately, every time. Call `open_session()` and the handle spends the
+password once and presents a token afterwards; skip it and every call is correct
+and an order of magnitude slower, with nothing at the call site to say why.
 
 You never choose a transport per call. But the two connections stay separately
 configurable and separately reportable, because they are two ports: a firewall
@@ -190,6 +199,24 @@ let q = Select::from("users")
     .limit(50);
 ```
 
+**On a cluster, two more clauses say which node may answer** rather than what the
+answer holds:
+
+```rust
+let q = Select::from("orders")
+    .staleness("30s")             // no node further behind than this may answer
+    .answered_by(Answerer::Leader); // and it must be where writes are decided
+
+// SELECT * FROM orders STALENESS 30s ANSWERED BY LEADER;
+```
+
+They are separate controls rather than one: a follower at zero lag is *level*,
+not authoritative. The answerer is an enumeration, so the wrong word does not
+compile; the span is a string because its **text** is the contract — `1m30s` and
+`90s` are the same length and different statements. A bound tighter than the
+cluster can know about itself is refused **by the node**, whose message names the
+floor, so this client checks a span's shape and never its value.
+
 **A long text field can come back a window at a time** rather than whole:
 
 ```rust
@@ -231,7 +258,7 @@ builder against it, and `cargo test --test node -- --ignored` additionally
 parser, and the reason a builder in Python or Go will render exactly what this
 one does.
 
-[contract]: https://github.com/TessariDB/TessariDB-protocol/blob/main/spec/query-builder-v1.md
+[contract]: https://github.com/tessaridb/tessaridb-protocol/blob/main/spec/query-builder-v1.md
 
 ## Branches
 

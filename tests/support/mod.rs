@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use serde_json::Value as Json;
 use tessaridb_client::query::{
-    BuildError, Create, Delete, Filter, Order, Query, Select, Update, field,
+    Answerer, BuildError, Create, Delete, Filter, Order, Query, Select, Update, field,
 };
 use tessaridb_client::{
     Geometry, Number, Parameters, Polygon, Position, RecordId, RecordRef, Ring, Value, ValueRange,
@@ -361,6 +361,15 @@ pub fn build(json: &Json) -> Result<Query, BuildError> {
             }
             if let Some(count) = held.get("limit").and_then(Json::as_u64) {
                 select = select.limit(count);
+            }
+            if let Some(bound) = held.get("staleness").and_then(Json::as_str) {
+                select = select.staleness(bound);
+            }
+            if let Some(word) = held.get("answered_by").and_then(Json::as_str) {
+                // Through `TryFrom` rather than around it: the builder takes an
+                // enumeration, so this is the one door a corpus string comes in
+                // by, and it is where the corpus's refusal case is reachable.
+                select = select.answered_by(Answerer::try_from(word)?);
             }
             select.build()
         }
