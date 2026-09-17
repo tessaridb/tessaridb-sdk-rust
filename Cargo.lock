@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "tessaridb-client"
-version = "0.0.5-alpha"
+version = "0.1.0"
 dependencies = [
  "serde_json",
  "thiserror",
