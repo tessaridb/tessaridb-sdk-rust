@@ -271,3 +271,40 @@ fn none_and_null_are_different_bytes_and_stay_different() {
     assert_eq!(encode(&Value::Null), vec![0x02]);
     assert_ne!(Value::None, Value::Null);
 }
+
+/// A removed-record change body, as §3.8 lays it out, with an optional cursor.
+fn change_body(cursor: Option<&str>) -> Vec<u8> {
+    let mut body = 7_u64.to_be_bytes().to_vec();
+    for text in ["orders", "orders:1"] {
+        body.extend_from_slice(&u32::try_from(text.len()).expect("short").to_be_bytes());
+        body.extend_from_slice(text.as_bytes());
+    }
+    body.push(1);
+    if let Some(cursor) = cursor {
+        body.extend_from_slice(&u32::try_from(cursor.len()).expect("short").to_be_bytes());
+        body.extend_from_slice(cursor.as_bytes());
+    }
+    body
+}
+
+#[test]
+fn a_change_from_a_split_table_carries_its_cursor_and_one_without_carries_none() {
+    let plain = tessaridb_client::Change::decode(&change_body(None)).expect("a plain change");
+    assert_eq!((plain.sequence, plain.cursor), (7, None));
+    let split = tessaridb_client::Change::decode(&change_body(Some("0:7,2:3"))).expect("split");
+    assert_eq!(split.became, tessaridb_client::Became::Removed);
+    assert_eq!(split.cursor.as_deref(), Some("0:7,2:3"));
+}
+
+#[test]
+fn a_follow_sends_its_cursor_last_and_only_when_it_has_one() {
+    let plain = tessaridb_client::Follow::everything()
+        .to_table("orders")
+        .encode();
+    let resumed = tessaridb_client::Follow::resuming_at("0:7,2:3")
+        .to_table("orders")
+        .encode();
+    assert_eq!(resumed[..plain.len()], plain[..]);
+    assert_eq!(&resumed[plain.len()..plain.len() + 4], &7_u32.to_be_bytes());
+    assert_eq!(&resumed[plain.len() + 4..], b"0:7,2:3");
+}
