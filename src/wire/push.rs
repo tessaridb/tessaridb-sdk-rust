@@ -20,6 +20,14 @@ pub struct Follow {
     pub from: u64,
     /// The table to watch, or every table in the session's database.
     pub table: Option<String>,
+    /// Where to resume a feed over a split table: the [`Change::cursor`] of the
+    /// last change handled.
+    ///
+    /// A split table's changes come from several logs that count separately,
+    /// so no one `sequence` says where such a feed was. The node resumes
+    /// *after* the change that carried this cursor — no `+1` here. Opaque:
+    /// store it and send it back, never build one.
+    pub cursor: Option<String>,
 }
 
 impl Follow {
@@ -29,6 +37,7 @@ impl Follow {
         Self {
             from: 0,
             table: None,
+            cursor: None,
         }
     }
 
@@ -41,6 +50,17 @@ impl Follow {
         Self {
             from: sequence.saturating_add(1),
             table: None,
+            cursor: None,
+        }
+    }
+
+    /// Resume a feed over a split table after the change that carried `cursor`.
+    #[must_use]
+    pub fn resuming_at(cursor: impl Into<String>) -> Self {
+        Self {
+            from: 0,
+            table: None,
+            cursor: Some(cursor.into()),
         }
     }
 
@@ -62,6 +82,11 @@ impl Follow {
                 put_text(&mut body, name);
             }
             None => body.push(0),
+        }
+        // Last and only when present: a body without it is the frame a node
+        // before the cursor existed reads.
+        if let Some(cursor) = &self.cursor {
+            put_text(&mut body, cursor);
         }
         body
     }
@@ -101,6 +126,10 @@ pub struct Change {
     pub id: String,
     /// What became of it.
     pub became: Became,
+    /// On a feed over a split table, where to resume after this change — pass
+    /// it to [`Follow::resuming_at`]. `None` on every other feed, where
+    /// `sequence` is the position.
+    pub cursor: Option<String>,
 }
 
 impl Change {
@@ -117,16 +146,23 @@ impl Change {
             }
             kind::REMOVED => Became::Removed,
             // Unlike an outcome tag, this one is not forward-compatible by
-            // design: the byte is the last field, so an unrecognised value means
-            // the frame's shape is not what this build expects and there is
-            // nothing after it to salvage.
+            // design: an unrecognised value means the frame's shape is not what
+            // this build expects, so nothing after it can be located.
             _ => return Err(Error::Malformed),
+        };
+        // The frame grows by appending: bytes after the change are its cursor,
+        // and their absence means the feed has none.
+        let cursor = if reader.remaining() > 0 {
+            Some(reader.take_text()?)
+        } else {
+            None
         };
         Ok(Self {
             sequence,
             table,
             id,
             became,
+            cursor,
         })
     }
 }
