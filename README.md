@@ -188,6 +188,41 @@ not a mystery.
 - **The operational routes** — health, readiness, metrics.
 - **The query builder** — re-exported from here, not a second dependency you are
   told to also add.
+- **Consuming a topic** — a member of a consumer group that calls your function
+  with each message, acknowledging automatically or as your function decides
+  (below).
+
+## Consuming a topic
+
+A topic's consumer group (`DEFINE GROUP`, engine `0.12.0-beta` or later) hands
+each message to one member and forgets it only when it is acknowledged. The
+[`Consumer`] reads under a group and calls your function once per message, in
+order:
+
+```rust
+use tessaridb_client::{Client, Consumer, Settle};
+
+let client = Client::connect("127.0.0.1:9080").await?;
+let mut consumer = Consumer::new(client, ("app", "main"), "jobs", "workers")?;
+let stop = consumer.stopper(); // stop.stop() from anywhere ends the loop
+
+// Automatic: Ok acknowledges the message, Err hands it back at once.
+consumer.run_auto(|message| async move {
+    println!("{} (delivery {})", message.position, message.deliveries);
+    Ok::<(), std::io::Error>(())
+}).await?;
+
+// Manual: your function decides — Ack, Nack(Some(delay)), or Leave it for the
+// group's deadline to hand out again.
+consumer.run_manual(|message| async move { Settle::Ack }).await?;
+```
+
+Both modes are **at least once**: make an effect outside the store idempotent,
+keyed by the topic, the group and `message.position`. The group, not the
+connection, holds the state, so a restarted process carries on where the group
+stands. The group is declared in the store, never by the consumer — its deadline
+is a choice about your work that no client can guess. The behaviour is the
+protocol repository's `spec/consumer-v1.md`, which every client follows.
 
 ## What it does not own
 

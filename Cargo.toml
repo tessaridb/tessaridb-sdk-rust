@@ -25,6 +25,8 @@ tokio = { version = "1", default-features = false, features = [
     "rt",
     "macros",
     "time",
+    # `sync` for the watch channel that stops a topic consumer between reads.
+    "sync",
 ] }
 thiserror = "2"
 # Most of the node's HTTP surface answers `application/json`, and its strings

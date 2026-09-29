@@ -45,6 +45,7 @@
     clippy::indexing_slicing
 )]
 
+mod consumers;
 mod support;
 
 use std::process::{Child, Command, Stdio};
