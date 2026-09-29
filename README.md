@@ -222,7 +222,9 @@ keyed by the topic, the group and `message.position`. The group, not the
 connection, holds the state, so a restarted process carries on where the group
 stands. The group is declared in the store, never by the consumer — its deadline
 is a choice about your work that no client can guess. The behaviour is the
-protocol repository's `spec/consumer-v1.md`, which every client follows.
+protocol repository's `spec/consumer-v1.md`, which every client follows, and
+`cargo test` renders the statements it sends against all 14 cases of
+`conformance/consumer-v1.json`.
 
 ## What it does not own
 
