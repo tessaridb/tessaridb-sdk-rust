@@ -64,7 +64,8 @@ reported so a caller can decline to send what an older node cannot read.
   decode every value type, subscribe to changes, and build the four common
   statements, including `STALENESS` and `ANSWERED BY`.
 - ✅ **Runs:** the HTTP half — health, readiness, metrics, sessions, credentials,
-  backup, and writing, sizing, reading and deleting a file in a bucket.
+  backup, writing, sizing, reading and deleting a file in a bucket, and
+  appending a batch of events to a series in one transaction (node `0.14.0-beta`).
 - 🚧 **Next:** the bucket listing, the one `/files` route this client does not
   offer yet.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
@@ -222,7 +223,9 @@ keyed by the topic, the group and `message.position`. The group, not the
 connection, holds the state, so a restarted process carries on where the group
 stands. The group is declared in the store, never by the consumer — its deadline
 is a choice about your work that no client can guess. The behaviour is the
-protocol repository's `spec/consumer-v1.md`, which every client follows.
+protocol repository's `spec/consumer-v1.md`, which every client follows, and
+`cargo test` renders the statements it sends against all 14 cases of
+`conformance/consumer-v1.json`.
 
 ## What it does not own
 

@@ -44,6 +44,7 @@ mod basic;
 mod condition;
 mod object;
 mod reply;
+mod series;
 
 use serde_json::Value as Json;
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
@@ -54,6 +55,7 @@ use crate::error::{Error, Result};
 pub use crate::http::condition::Condition;
 pub use crate::http::object::Bucket;
 use crate::http::reply::Reply;
+pub use crate::http::series::Series;
 
 /// The node's operational surface.
 ///
@@ -624,6 +626,20 @@ impl Operations {
         name: impl Into<String>,
     ) -> Bucket {
         Bucket::new(self.clone(), namespace, database, name)
+    }
+
+    /// The series of this name, in this database, in this namespace, for
+    /// appending batches of events to (protocol §5.9).
+    ///
+    /// Nothing is checked here and nothing is reached: the node says whether
+    /// the three names are a series when a batch arrives.
+    pub fn series(
+        &self,
+        namespace: impl Into<String>,
+        database: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Series {
+        Series::new(self.clone(), namespace, database, name)
     }
 
     /// What the node reports about itself, in the Prometheus text format.

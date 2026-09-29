@@ -28,9 +28,13 @@ use tokio::sync::watch;
 
 use crate::client::Client;
 use crate::error::{Error, Result};
-use crate::query::{BuildError, check_name};
+use crate::query::BuildError;
 use crate::value::{Number, Value};
 use crate::wire::message::Answer;
+
+mod statements;
+
+use statements::Statements;
 
 /// The first wait after a read that answered nothing (§4.5).
 const FIRST_WAIT: Duration = Duration::from_millis(50);
@@ -83,24 +87,10 @@ impl Stopper {
 #[derive(Debug)]
 pub struct Consumer<S = TcpStream> {
     client: Client<S>,
-    /// `USE NAMESPACE …; USE DATABASE …; ` — sent with every statement, because
-    /// a connection that reconnected has forgotten any earlier `USE` (§5).
-    tenancy: String,
-    topic: String,
-    group: String,
+    statements: Statements,
     batch: u64,
     signal: watch::Sender<bool>,
     stopped: watch::Receiver<bool>,
-}
-
-/// Whether a group name may be written into a statement as a quoted literal
-/// (§3): the statement cannot take it as a parameter, so it is checked, never
-/// escaped.
-fn is_group_name(name: &str) -> bool {
-    (1..=128).contains(&name.len())
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "_.:-".contains(character))
 }
 
 fn whole(value: Option<&Value>) -> Option<u64> {
@@ -130,20 +120,11 @@ where
         topic: &str,
         group: &str,
     ) -> std::result::Result<Self, BuildError> {
-        check_name("namespace", namespace)?;
-        check_name("database", database)?;
-        check_name("topic", topic)?;
-        if !is_group_name(group) {
-            return Err(BuildError::NotAGroupName {
-                name: group.to_owned(),
-            });
-        }
+        let statements = Statements::new((namespace, database), topic, group)?;
         let (signal, stopped) = watch::channel(false);
         Ok(Self {
             client,
-            tenancy: format!("USE NAMESPACE {namespace}; USE DATABASE {database}; "),
-            topic: topic.to_owned(),
-            group: group.to_owned(),
+            statements,
             batch: DEFAULT_BATCH,
             signal,
             stopped,
@@ -232,8 +213,11 @@ where
     ///
     /// Whatever the node refused, or the transport failure.
     pub async fn ack(&mut self, positions: &[u64]) -> Result<u64> {
-        let statement = format!("ACK {} FOR CONSUMER '{}' AT ", self.topic, self.group);
-        self.settle(&statement, positions, "").await
+        if positions.is_empty() {
+            return Ok(0);
+        }
+        let (script, parameters) = self.statements.ack(positions)?;
+        self.settle(&script, parameters).await
     }
 
     /// Hand these positions back, now or after `delay`; answers how many were
@@ -243,36 +227,15 @@ where
     ///
     /// Whatever the node refused, or the transport failure.
     pub async fn nack(&mut self, positions: &[u64], delay: Option<Duration>) -> Result<u64> {
-        let statement = format!("NACK {} FOR CONSUMER '{}' AT ", self.topic, self.group);
-        // A delay is a duration literal in the grammar, not a parameter, and it
-        // is written from a number this function formats, never from a caller's
-        // text. Under a millisecond there is nothing to wait for.
-        let tail = delay
-            .map(|delay| delay.as_millis())
-            .filter(|millis| *millis > 0)
-            .map_or_else(String::new, |millis| format!(" DELAY {millis}ms"));
-        self.settle(&statement, positions, &tail).await
-    }
-
-    async fn settle(&mut self, statement: &str, positions: &[u64], tail: &str) -> Result<u64> {
         if positions.is_empty() {
             return Ok(0);
         }
-        let mut script = format!("{}{statement}", self.tenancy);
-        let mut parameters = Vec::with_capacity(positions.len());
-        for (index, position) in positions.iter().enumerate() {
-            if index > 0 {
-                script.push_str(", ");
-            }
-            let name = format!("p{index}");
-            script.push('$');
-            script.push_str(&name);
-            let held = i64::try_from(*position).map_err(|_| Error::Malformed)?;
-            parameters.push((name, Value::Number(Number::Integer(held))));
-        }
-        script.push_str(tail);
-        script.push(';');
-        let answers = self.client.run_with(&script, None, parameters).await?;
+        let (script, parameters) = self.statements.nack(positions, delay)?;
+        self.settle(&script, parameters).await
+    }
+
+    async fn settle(&mut self, script: &str, parameters: Vec<(String, Value)>) -> Result<u64> {
+        let answers = self.client.run_with(script, None, parameters).await?;
         match answers.last() {
             Some(Answer::Value { value, .. }) => whole(Some(value)).ok_or(Error::Malformed),
             _ => Err(Error::Malformed),
@@ -291,10 +254,7 @@ where
             if self.is_stopped() {
                 return Ok(None);
             }
-            let script = format!(
-                "{}READ FROM {} FOR CONSUMER '{}' LIMIT {};",
-                self.tenancy, self.topic, self.group, self.batch
-            );
+            let script = self.statements.read(self.batch);
             let answers = self.client.run(&script, None).await?;
             let messages = match answers.last() {
                 Some(Answer::Records { records, .. }) => records
