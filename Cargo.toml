@@ -1,6 +1,6 @@
 [package]
 name = "tessaridb-client"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -25,6 +25,8 @@ tokio = { version = "1", default-features = false, features = [
     "rt",
     "macros",
     "time",
+    # `sync` for the watch channel that stops a topic consumer between reads.
+    "sync",
 ] }
 thiserror = "2"
 # Most of the node's HTTP surface answers `application/json`, and its strings

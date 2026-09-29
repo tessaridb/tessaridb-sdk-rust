@@ -84,6 +84,19 @@ pub enum BuildError {
         name: String,
     },
 
+    /// A consumer group name that cannot be written into a statement.
+    ///
+    /// A group is named by a quoted literal the grammar does not accept as a
+    /// parameter, so it is checked against a narrow pattern and refused rather
+    /// than escaped (consumer contract §3).
+    #[error(
+        "group {name:?} is not a group name: 1 to 128 of letters, digits, `_`, `.`, `:` and `-`"
+    )]
+    NotAGroupName {
+        /// What was supplied.
+        name: String,
+    },
+
     /// A statement with nothing to say.
     #[error("{what}")]
     Incomplete {

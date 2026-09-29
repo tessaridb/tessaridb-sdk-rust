@@ -86,10 +86,12 @@ pub mod value;
 pub mod wire;
 
 mod client;
+mod consumer;
 mod error;
 mod feed;
 
 pub use crate::client::Client;
+pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
 pub use crate::feed::Feed;
 pub use crate::geometry::{Geometry, Polygon, Position, Ring};
