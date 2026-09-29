@@ -95,7 +95,7 @@ pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
 pub use crate::feed::Feed;
 pub use crate::geometry::{Geometry, Polygon, Position, Ring};
-pub use crate::http::{Bucket, Condition, Operations};
+pub use crate::http::{Bucket, Condition, Operations, Series};
 pub use crate::mapping::{FromRecord, FromValue, MappingFault, Row};
 pub use crate::value::{Number, RecordId, RecordRef, Value, ValueRange};
 pub use crate::wire::message::{

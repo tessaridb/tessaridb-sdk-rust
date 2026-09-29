@@ -115,6 +115,14 @@ pub enum Error {
         message: String,
     },
 
+    /// A batch for [`Series::append`](crate::Series::append) holds something an
+    /// event cannot carry, found before anything was sent (protocol §5.9).
+    #[error("not an event: {reason}")]
+    NotAnEvent {
+        /// What was wrong with it.
+        reason: &'static str,
+    },
+
     /// The call needs a credential and this handle holds none.
     ///
     /// The only failure here the node never saw, and deliberately so. It is

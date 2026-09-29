@@ -64,7 +64,8 @@ reported so a caller can decline to send what an older node cannot read.
   decode every value type, subscribe to changes, and build the four common
   statements, including `STALENESS` and `ANSWERED BY`.
 - ✅ **Runs:** the HTTP half — health, readiness, metrics, sessions, credentials,
-  backup, and writing, sizing, reading and deleting a file in a bucket.
+  backup, writing, sizing, reading and deleting a file in a bucket, and
+  appending a batch of events to a series in one transaction (node `0.14.0-beta`).
 - 🚧 **Next:** the bucket listing, the one `/files` route this client does not
   offer yet.
 - ⚠️ **Unstable:** the public API changes without notice while the server it

@@ -900,6 +900,82 @@ async fn a_file_written_through_the_sdk_reads_back_byte_for_byte() {
 
 #[tokio::test]
 #[ignore = "needs the shipped binary; run with --ignored and TESSARIDB_BIN set"]
+async fn a_batch_of_events_lands_whole_in_event_time_order_or_not_at_all() {
+    // Protocol §5.9. The node is the oracle for the rendering: every spelling in
+    // the batch below is read back through its own parser, and a value this
+    // client spelled wrongly fails the batch or comes back different.
+    let node = HttpNode::start().await;
+    let mut client = Client::connect(&node.wire)
+        .await
+        .unwrap_or_else(|e| panic!("could not reach the wire port at {}: {e}", node.wire));
+    client
+        .run(
+            "DEFINE NAMESPACE app; USE NAMESPACE app; DEFINE DATABASE main; USE DATABASE main; \
+             DEFINE SERIES readings RETAIN 36500d TIME at;",
+            None,
+        )
+        .await
+        .expect("the node should accept a series");
+    let series = node.operations().series("app", "main", "readings");
+    let event = |second: i64, sensor: &str| {
+        Value::Object(std::collections::BTreeMap::from([
+            ("sensor".to_owned(), Value::String(sensor.to_owned())),
+            ("v".to_owned(), Value::Number(Number::Float(0.5))),
+            ("note".to_owned(), Value::String("it's \\ fine".to_owned())),
+            (
+                "at".to_owned(),
+                Value::Datetime {
+                    seconds: 1_790_676_000 + second,
+                    nanos: 0,
+                },
+            ),
+        ]))
+    };
+
+    let landed = series
+        .append(&[event(2, "b"), event(1, "a")])
+        .await
+        .expect("a batch for a series should land");
+    assert_eq!(landed, 2);
+
+    // An event with no time: the series refuses it, and the whole batch with it.
+    let refused = series
+        .append(&[
+            event(3, "c"),
+            Value::Object(std::collections::BTreeMap::new()),
+        ])
+        .await
+        .expect_err("an event-time series refuses an event with no time");
+    assert!(
+        matches!(refused, Error::HttpRefused { status: 400, .. }),
+        "{refused:?}"
+    );
+
+    let answers = client
+        .run("SELECT sensor, note FROM readings;", None)
+        .await
+        .expect("the read should be accepted");
+    let held = records(&answers[0]);
+    let sensors: Vec<&Value> = held
+        .iter()
+        .map(|(_, value)| field(value, "sensor"))
+        .collect();
+    assert_eq!(
+        sensors,
+        vec![
+            &Value::String("a".to_owned()),
+            &Value::String("b".to_owned())
+        ],
+        "event-time order, and nothing of the refused batch"
+    );
+    assert_eq!(
+        field(&held[0].1, "note"),
+        &Value::String("it's \\ fine".to_owned())
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs the shipped binary; run with --ignored and TESSARIDB_BIN set"]
 async fn an_absent_file_and_an_empty_file_are_different_answers() {
     // The distinction the node draws and a client can lose: absent answers 404,
     // and empty answers 200 with a declared length of zero. A `get` that
