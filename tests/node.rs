@@ -45,6 +45,7 @@
     clippy::indexing_slicing
 )]
 
+mod caches;
 mod consumers;
 mod support;
 
