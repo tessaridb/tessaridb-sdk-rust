@@ -123,6 +123,15 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// An argument to a [`Space`](crate::Space) call the cache contract refuses
+    /// before sending — a zero ttl, which would remove a key, a key listing out
+    /// of range, an empty lock holder (cache contract §2).
+    #[error("not a cache call: {reason}")]
+    NotACacheArgument {
+        /// What was wrong with it.
+        reason: &'static str,
+    },
+
     /// The call needs a credential and this handle holds none.
     ///
     /// The only failure here the node never saw, and deliberately so. It is

@@ -85,11 +85,13 @@ pub mod query;
 pub mod value;
 pub mod wire;
 
+mod cache;
 mod client;
 mod consumer;
 mod error;
 mod feed;
 
+pub use crate::cache::{Lease, Space, Ttl};
 pub use crate::client::Client;
 pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};

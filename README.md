@@ -227,6 +227,37 @@ protocol repository's `spec/consumer-v1.md`, which every client follows, and
 `cargo test` renders the statements it sends against all 14 cases of
 `conformance/consumer-v1.json`.
 
+## A space as a cache, a counter and a lock
+
+A space (`DEFINE SPACE`) keeps one value per key with an optional expiry. A
+[`Space`] borrows a connection and makes each use one call:
+
+```rust
+use std::time::Duration;
+use tessaridb_client::{Client, Space, Value};
+
+let mut client = Client::connect("127.0.0.1:9080").await?;
+let mut cache = Space::new(&mut client, ("app", "main"), "cache")?;
+
+cache.set("session:abc", Value::from("ada"), Some(Duration::from_secs(1800))).await?;
+let page = cache
+    .get_or_set("page:/", Duration::from_secs(60), || async { Value::from("<html>…") })
+    .await?;
+let hits = cache.incr("hits", 1).await?;
+
+if let Some(lease) = cache.lock("nightly-report", Duration::from_secs(30), None).await? {
+    // … work, extending before 30 s pass: cache.extend(&lease, None).await?
+    cache.release(lease).await?;
+}
+```
+
+Two rules the type is built around: **a plain `set` clears an expiry the key
+had** — pass the ttl on every write that must keep one — and **a lock is a
+lease, not a mutex**: past its ttl another holder may take it. `release` is an
+expiring conditional write, never a delete, so a lease that lapsed cannot remove
+the next holder's lock. The statements are the protocol repository's
+`spec/cache-v1.md`, which every client follows.
+
 ## What it does not own
 
 **The language.** Statements are TessariQL. This SDK does not invent a second way to
