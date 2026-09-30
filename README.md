@@ -48,7 +48,8 @@ This client's version is **its own** and never tracks the engine's. A fix here
 would otherwise force an invented engine release, and an engine release would
 force five invented client releases.
 
-What has to match is the **protocol**. This release speaks **protocol 1.1** and
+What has to match is the **protocol**. This release speaks **protocol 1.1**, plus the vault frame of **1.2**, which it
+sends only to a node that announces minor 2 (node `0.17.0-beta` and later), and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
