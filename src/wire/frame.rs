@@ -37,6 +37,10 @@ pub enum Kind {
     Subscribe,
     /// One change, sent because it happened.
     Change,
+    /// Unseal, seal, change the passphrase or ask the seal status, the
+    /// passphrase a field of its own (protocol §3.14). Numbered 17: the link
+    /// nodes use between themselves holds 6-12 and 14-16.
+    Vault,
 }
 
 impl Kind {
@@ -49,6 +53,7 @@ impl Kind {
             Self::Refusal => 3,
             Self::Subscribe => 4,
             Self::Change => 5,
+            Self::Vault => 17,
         }
     }
 
@@ -61,6 +66,7 @@ impl Kind {
             3 => Some(Self::Refusal),
             4 => Some(Self::Subscribe),
             5 => Some(Self::Change),
+            17 => Some(Self::Vault),
             _ => None,
         }
     }

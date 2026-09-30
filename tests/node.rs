@@ -48,6 +48,7 @@
 mod caches;
 mod consumers;
 mod support;
+mod vaults;
 
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;

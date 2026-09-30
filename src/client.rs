@@ -20,6 +20,10 @@ use crate::wire::push::Follow;
 #[derive(Debug)]
 pub struct Client<S = TcpStream> {
     stream: S,
+    /// The minor version the node said at the greeting, which decides what this
+    /// client may send it; `None` for a stream handed in already greeted, whose
+    /// minor this client was never told.
+    peer_minor: Option<u8>,
 }
 
 impl Client<TcpStream> {
@@ -34,13 +38,12 @@ impl Client<TcpStream> {
         // because the peer is waiting for it. Leaving it on adds latency to
         // exactly the pattern this protocol is made of.
         stream.set_nodelay(true)?;
-        // The peer's minor is deliberately dropped here rather than stored.
-        // It decides only what this client may *send* to an older node, and
-        // nothing this build sends is minor-gated yet — a field kept against a
-        // future need would have to be given a value by `with_stream`, which
-        // does not know one, and an invented value is worse than no field.
-        let _peer_minor = frame::greet(&mut stream).await?;
-        Ok(Self { stream })
+        // Kept because the vault frame is minor-gated (protocol §2.3): it is the
+        // one thing this client sends that an older node cannot read. A stream
+        // handed in through `with_stream` has no known minor, and gets `None`
+        // rather than an invented number.
+        let peer_minor = Some(frame::greet(&mut stream).await?);
+        Ok(Self { stream, peer_minor })
     }
 }
 
@@ -52,8 +55,14 @@ where
     ///
     /// For tests and for callers that own their transport. [`Client::connect`]
     /// is the ordinary way in.
+    ///
+    /// Such a client does not know the node's minor, so a vault call on it is
+    /// sent without the version check [`Client::connect`] makes.
     pub const fn with_stream(stream: S) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            peer_minor: None,
+        }
     }
 
     /// Run a script and read what came back.
@@ -108,7 +117,33 @@ where
             Kind::Refusal => Err(refusal(body)),
             // A node does not send a request, and a change only arrives on a
             // connection that asked to follow — which this one has not.
-            Kind::Request | Kind::Subscribe | Kind::Change => {
+            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault => {
+                Err(Error::UnknownFrame { tag: kind.tag() })
+            }
+        }
+    }
+
+    /// Send one vault frame (protocol §3.14) and read the status back.
+    pub(crate) async fn vault_frame(&mut self, body: &[u8]) -> Result<Value> {
+        if let Some(found) = self.peer_minor
+            && found < VAULT_MINOR
+        {
+            return Err(Error::NodeTooOld {
+                found,
+                needed: VAULT_MINOR,
+            });
+        }
+        frame::write(&mut self.stream, Kind::Vault, body).await?;
+        let Some((kind, answer)) = frame::read(&mut self.stream).await? else {
+            return Err(Error::Truncated);
+        };
+        match kind {
+            Kind::Answer => match decode_answers(&answer)?.pop() {
+                Some(Answer::Value { value, .. }) => Ok(value),
+                _ => Err(Error::Malformed),
+            },
+            Kind::Refusal => Err(refusal(answer)),
+            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault => {
                 Err(Error::UnknownFrame { tag: kind.tag() })
             }
         }
@@ -125,6 +160,9 @@ where
         Ok(Feed::new(self.stream))
     }
 }
+
+/// The node minor at which the vault frame exists (protocol §2.3).
+const VAULT_MINOR: u8 = 2;
 
 /// A refusal body is the node's own message, as the whole body.
 ///

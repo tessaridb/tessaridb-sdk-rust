@@ -90,6 +90,7 @@ mod client;
 mod consumer;
 mod error;
 mod feed;
+mod vault;
 
 pub use crate::cache::{Lease, Space, Ttl};
 pub use crate::client::Client;
@@ -100,6 +101,7 @@ pub use crate::geometry::{Geometry, Polygon, Position, Ring};
 pub use crate::http::{Bucket, Condition, Operations, Series};
 pub use crate::mapping::{FromRecord, FromValue, MappingFault, Row};
 pub use crate::value::{Number, RecordId, RecordRef, Value, ValueRange};
+pub use crate::vault::{Custody, Page, SealState, Vault, VaultStatus};
 pub use crate::wire::message::{
     Answer, Correction, Exact, Names, Note, Parameters, Request, Suggested,
 };
