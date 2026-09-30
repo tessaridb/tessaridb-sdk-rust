@@ -123,6 +123,32 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// The node is older than the call: its greeting carried a minor below the
+    /// one the vault frame needs. Refused before sending, because an older node
+    /// closes the connection on a frame it does not know, which would read as a
+    /// network fault rather than as the version gap it is.
+    #[error("that node speaks protocol minor {found}; this call needs {needed} or later")]
+    NodeTooOld {
+        /// The minor the node said.
+        found: u8,
+        /// The minor the call needs.
+        needed: u8,
+    },
+
+    /// A name refused before sending — a vault call's field or actor that is not
+    /// a name (vault contract §4).
+    #[error(transparent)]
+    Build(#[from] crate::query::BuildError),
+
+    /// An argument to a [`Vault`](crate::Vault) call the vault contract refuses
+    /// before sending — a listing limit out of range, a write with no fields
+    /// (vault contract §6).
+    #[error("not a vault call: {reason}")]
+    NotAVaultArgument {
+        /// What was wrong with it.
+        reason: &'static str,
+    },
+
     /// An argument to a [`Space`](crate::Space) call the cache contract refuses
     /// before sending — a zero ttl, which would remove a key, a key listing out
     /// of range, an empty lock holder (cache contract §2).

@@ -48,7 +48,8 @@ This client's version is **its own** and never tracks the engine's. A fix here
 would otherwise force an invented engine release, and an engine release would
 force five invented client releases.
 
-What has to match is the **protocol**. This release speaks **protocol 1.1** and
+What has to match is the **protocol**. This release speaks **protocol 1.1**, plus the vault frame of **1.2**, which it
+sends only to a node that announces minor 2 (node `0.17.0-beta` and later), and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
@@ -257,6 +258,34 @@ lease, not a mutex**: past its ttl another holder may take it. `release` is an
 expiring conditional write, never a delete, so a lease that lapsed cannot remove
 the next holder's lock. The statements are the protocol repository's
 `spec/cache-v1.md`, which every client follows.
+
+## A vault, and its passphrase
+
+A vault (`DEFINE VAULT`) keeps `SECRET` fields encrypted in every copy that is not
+a running, unsealed node. The passphrase goes in a frame of its own, never in a
+statement, and appears in no error or `Debug` this crate produces:
+
+```rust
+use std::collections::BTreeMap;
+use tessaridb_client::{Client, Value, Vault};
+
+let mut client = Client::connect("127.0.0.1:9080").await?;
+client.unseal(&store_passphrase).await?;          // the store's key, for ten minutes
+
+let mut vault = Vault::new(&mut client, ("app", "main"), "team")?;
+let fields = BTreeMap::from([("password".to_owned(), Value::from("hunter2"))]);
+vault.write("github", &fields).await?;            // creates or edits, keeps recipients
+let page = vault.list(None, Some(100)).await?;    // ids only, never a value
+let secret = vault.reveal("github", &["password"]).await?;
+```
+
+A vault declared `DEFINE VAULT team PASSPHRASE '…'` opens with its own passphrase
+instead, and the store's opens nothing in it: `vault.status()`, `vault.unseal(…)`,
+`vault.seal()` and `vault.change_passphrase(…)` act on that vault alone, and
+`status().custody` says which kind a vault is. An unseal lasts the node's period
+(ten minutes unless it was started otherwise) and then closes by itself; a refusal
+after a run of wrong passphrases means **wait**, and is not retried here. The
+statements and frames are the protocol repository's `spec/vault-v1.md`.
 
 ## What it does not own
 
