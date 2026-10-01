@@ -90,8 +90,8 @@ where
 
 /// Read one response, sending a successful body to `sink` instead of holding it.
 ///
-/// For the one route whose answer has no bound. `/backup` returns the store's
-/// whole log, which on any real store is larger than [`BODY_CEILING`] — so the
+/// For the one route whose answer has no bound. `/backup` returns a snapshot of
+/// the store, or its log from a position, which on any real store is larger than [`BODY_CEILING`] — so the
 /// ceiling is not a safety limit there, it is a cap on whether the call works at
 /// all. Nothing here is allocated in proportion to the body, so there is nothing
 /// for a ceiling to bound and none is applied.

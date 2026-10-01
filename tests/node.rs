@@ -1542,7 +1542,7 @@ async fn a_refused_backup_leaves_the_callers_sink_untouched() {
     // backup file.
     //
     // On a **closed** store deliberately. On an open one this call succeeds
-    // without a credential and hands back the whole log, which is the node's
+    // without a credential and hands back the whole store, which is the node's
     // decision and not this client's to override.
     let node = HttpNode::start_closed(OWNER.0, OWNER.1).await;
     node.closed_fixture().await;

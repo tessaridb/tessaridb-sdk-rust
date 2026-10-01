@@ -504,7 +504,8 @@ impl Operations {
     ///
     /// Every other route on this surface answers something whose size is known
     /// before it is asked for — a health object, a metrics page, a refusal, or a
-    /// file the caller wrote themselves. This one answers the store's whole log,
+    /// file the caller wrote themselves. This one answers a snapshot of the
+    /// store's whole state (a node before `0.18.0-beta` answered its whole log),
     /// and on any store worth backing up that is larger than the 16 MiB this
     /// client will hold in memory. Returning `Vec<u8>` would have produced a
     /// method that works in its own tests and refuses every real store; raising
@@ -566,7 +567,8 @@ impl Operations {
     /// Take a backup of everything committed **after** `from`, writing it to `sink`.
     ///
     /// The node's incremental: `BACKUP FROM <sequence>`, where the sequence is a
-    /// commit position rather than a byte offset. It is not a resume — a copy
+    /// commit position rather than a byte offset. This is the log rather than a
+    /// snapshot, and `from = 1` is the whole log. It is not a resume — a copy
     /// that failed halfway is restarted, not continued — and this client offers
     /// no resume because the node offers nothing to build one from.
     ///
