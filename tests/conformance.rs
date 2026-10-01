@@ -32,6 +32,7 @@ mod support;
 
 use serde_json::Value as Json;
 use tessaridb_client::codec::{decode, encode};
+use tessaridb_client::{Error, Redirect, Settlement};
 
 use crate::support::{hex_to_bytes, read_corpus, same, value_of};
 
@@ -83,6 +84,53 @@ fn every_corpus_vector_encodes_and_decodes_exactly() {
 
     assert_eq!(checked, cases.len(), "every case must have been checked");
     println!("conformance: {checked} vectors, both directions");
+}
+
+/// `frames-v1.json`: every `Elsewhere` body (protocol §3.12) decodes to exactly
+/// its `decoded`, and every `malformed` one is refused as malformed.
+#[test]
+fn every_elsewhere_vector_decodes_exactly_or_is_refused() {
+    let corpus = read_corpus("frames-v1.json");
+    let cases = corpus["elsewhere"].as_array().expect("an elsewhere list");
+    assert!(cases.len() >= 8, "the corpus holds every case it should");
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or_default();
+        let decoded =
+            Redirect::decode(&hex_to_bytes(case["body_hex"].as_str().unwrap_or_default()));
+        if case.get("malformed").is_some() {
+            assert!(
+                matches!(decoded, Err(Error::Malformed)),
+                "{name}: {decoded:?}"
+            );
+            continue;
+        }
+        let want = &case["decoded"];
+        let redirect = decoded.unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert_eq!(
+            hex(&redirect.node),
+            want["node"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+        assert_eq!(
+            redirect.epoch.to_string(),
+            want["epoch"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+        let settlement = match redirect.settlement {
+            Settlement::Settled => "settled",
+            Settlement::Transient => "transient",
+        };
+        assert_eq!(
+            settlement,
+            want["settlement"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+        assert_eq!(
+            redirect.endpoint,
+            want["endpoint"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
