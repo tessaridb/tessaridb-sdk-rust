@@ -73,7 +73,7 @@ reported so a caller can decline to send what an older node cannot read.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
   talks to is pre-1.0.
 
-It implements **protocol 1.1**: a two-number version where only a differing
+It implements **protocol 1.2**: a two-number version where only a differing
 major is a refusal, and an outcome kind this build has never seen is stepped over
 by its length rather than ending the read.
 
