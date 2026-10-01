@@ -106,6 +106,7 @@ pub use crate::wire::message::{
     Answer, Correction, Exact, Names, Note, Parameters, Request, Suggested,
 };
 pub use crate::wire::push::{Became, Change, Follow};
+pub use crate::wire::redirect::{Redirect, Settlement};
 
 /// The protocol constants.
 ///
@@ -136,7 +137,10 @@ pub mod protocol {
     /// uses it for one thing only: declining to send what an older peer cannot
     /// read. Decoding is already safe without it — an unknown outcome is stepped
     /// over by its length, and an unknown frame kind closes the connection.
-    pub const MINOR: u8 = 0;
+    ///
+    /// `2`: this client reads the redirect frame minor 1 introduced and sends
+    /// the vault frame minor 2 introduced.
+    pub const MINOR: u8 = 2;
 
     /// The largest frame this client will read — or send.
     ///

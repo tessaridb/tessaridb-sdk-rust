@@ -135,6 +135,47 @@ pub enum Error {
         needed: u8,
     },
 
+    /// The node sent the request elsewhere (protocol §3.12) and this client
+    /// cannot follow: it was handed a stream it does not know how to dial
+    /// again. Nothing ran; the redirect is the answer.
+    #[error("the node sent this request to {} and this client cannot dial there", .0.endpoint)]
+    Redirected(crate::wire::redirect::Redirect),
+
+    /// Three redirects in a row and still no answer. Following further would
+    /// not tell a loop from progress.
+    #[error("still redirected after {hops} hops; stopping rather than going round")]
+    RedirectLoop {
+        /// How many were followed.
+        hops: u8,
+    },
+
+    /// A redirect dated by an older leadership than one this request already
+    /// followed: it was decided before that one and points at the past.
+    #[error("redirected under epoch {epoch} after following epoch {floor}")]
+    StaleRedirect {
+        /// The epoch the redirect carried.
+        epoch: u64,
+        /// The newest epoch already followed.
+        floor: u64,
+    },
+
+    /// The address a redirect named answered as a different node, so the
+    /// request was not sent there.
+    #[error("the redirect named another node than the one that answered there")]
+    WrongNode {
+        /// The node the redirect named.
+        expected: [u8; 16],
+    },
+
+    /// The session's namespace or database is not a plain name, so it is not
+    /// selected again on the node a redirect named — a name is grammar, and
+    /// this client does not quote one into a script.
+    #[error("cannot follow: `{name}` is not a plain name to select on the other node")]
+    NotFollowable {
+        /// The name refused.
+        name: String,
+    },
+
     /// A name refused before sending — a vault call's field or actor that is not
     /// a name (vault contract §4).
     #[error(transparent)]

@@ -48,8 +48,9 @@ This client's version is **its own** and never tracks the engine's. A fix here
 would otherwise force an invented engine release, and an engine release would
 force five invented client releases.
 
-What has to match is the **protocol**. This release speaks **protocol 1.1**, plus the vault frame of **1.2**, which it
-sends only to a node that announces minor 2 (node `0.17.0-beta` and later), and
+What has to match is the **protocol**. This release speaks **protocol 1.2** — it
+reads the redirect frame of minor 1 and sends the vault frame of minor 2, the
+latter only to a node that announces minor 2 (node `0.17.0-beta` and later) — and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
@@ -193,6 +194,25 @@ not a mystery.
 - **Consuming a topic** — a member of a consumer group that calls your function
   with each message, acknowledging automatically or as your function decides
   (below).
+- **Following a redirect** — when a node answers a request with *the node that
+  should run this is over there* (a write to a range another node leads, a read
+  it cannot meet), the request is sent there (below).
+
+## Following a redirect
+
+A clustered node that cannot run a request names the node that can, in a frame
+of its own rather than as an error. [`Client::connect`] follows it: at most three
+hops, never to an older leadership than one already followed, and only after
+`session::context()` on arrival says the node there is the node named (node
+`0.20.0-beta` and later). The session's namespace and database are selected
+there first, and only when each is a plain name (`[A-Za-z_][A-Za-z0-9_]*`) —
+names are grammar, and this client does not quote one into a script. A
+*settled* redirect (a write's leader) moves the connection to that node; a
+*transient* one (one read) answers and leaves the connection where it was.
+
+Each refusal is its own error — `RedirectLoop`, `StaleRedirect`, `WrongNode`,
+`NotFollowable` — and a client built over a stream it cannot dial again
+(`Client::with_stream`) returns the redirect as `Error::Redirected` instead.
 
 ## Consuming a topic
 

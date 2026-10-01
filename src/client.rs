@@ -1,5 +1,7 @@
 //! The connection, and what you can ask it.
 
+mod follow;
+
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
@@ -9,6 +11,8 @@ use crate::value::Value;
 use crate::wire::frame::{self, Kind};
 use crate::wire::message::{Answer, Request, decode_answers};
 use crate::wire::push::Follow;
+use crate::wire::redirect::Redirect;
+use follow::{Dial, Signed};
 
 /// A connection to one node.
 ///
@@ -24,6 +28,18 @@ pub struct Client<S = TcpStream> {
     /// client may send it; `None` for a stream handed in already greeted, whose
     /// minor this client was never told.
     peer_minor: Option<u8>,
+    /// How to reach the node a redirect names; `None` for a stream handed in,
+    /// which this client cannot dial again, so a redirect is returned instead.
+    dial: Option<Dial<S>>,
+    /// The credentials this session last presented, presented again on the
+    /// node a redirect sends the request to.
+    signed: Option<Signed>,
+}
+
+/// What one request came back as.
+enum Exchanged {
+    Answers(Vec<Answer>),
+    Elsewhere(Redirect),
 }
 
 impl Client<TcpStream> {
@@ -43,7 +59,12 @@ impl Client<TcpStream> {
         // handed in through `with_stream` has no known minor, and gets `None`
         // rather than an invented number.
         let peer_minor = Some(frame::greet(&mut stream).await?);
-        Ok(Self { stream, peer_minor })
+        Ok(Self {
+            stream,
+            peer_minor,
+            dial: Some(Dial::tcp()),
+            signed: None,
+        })
     }
 }
 
@@ -62,6 +83,8 @@ where
         Self {
             stream,
             peer_minor: None,
+            dial: None,
+            signed: None,
         }
     }
 
@@ -107,14 +130,32 @@ where
     }
 
     /// Send a request already built.
+    ///
+    /// A redirect (protocol §3.12) is followed: the request is sent to the node
+    /// it names, at most three hops, after checking that the node answering
+    /// there is the one named and selecting the session's namespace and
+    /// database again. A `settled` redirect moves this connection to that node;
+    /// a `transient` one answers this request and leaves it where it was.
     pub async fn send(&mut self, request: &Request) -> Result<Vec<Answer>> {
+        if let Some((name, password)) = &request.credentials {
+            self.signed = Some(Signed::new(name, password));
+        }
+        match self.exchange(request).await? {
+            Exchanged::Answers(answers) => Ok(answers),
+            Exchanged::Elsewhere(redirect) => self.followed(request, redirect).await,
+        }
+    }
+
+    /// Send a request and read one reply, a redirect included.
+    async fn exchange(&mut self, request: &Request) -> Result<Exchanged> {
         frame::write(&mut self.stream, Kind::Request, &request.encode()).await?;
         let Some((kind, body)) = frame::read(&mut self.stream).await? else {
             return Err(Error::Truncated);
         };
         match kind {
-            Kind::Answer => decode_answers(&body),
+            Kind::Answer => decode_answers(&body).map(Exchanged::Answers),
             Kind::Refusal => Err(refusal(body)),
+            Kind::Elsewhere => Redirect::decode(&body).map(Exchanged::Elsewhere),
             // A node does not send a request, and a change only arrives on a
             // connection that asked to follow — which this one has not.
             Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault => {
@@ -143,7 +184,7 @@ where
                 _ => Err(Error::Malformed),
             },
             Kind::Refusal => Err(refusal(answer)),
-            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault => {
+            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault | Kind::Elsewhere => {
                 Err(Error::UnknownFrame { tag: kind.tag() })
             }
         }
