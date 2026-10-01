@@ -352,3 +352,87 @@ fn a_settlement_byte_that_is_neither_one_nor_two_is_malformed() {
         }
     );
 }
+
+/// The live half (protocol §3.12): a write and a leader-only read sent to a
+/// follower of a real two-node cluster land on the leader, the read by a
+/// transient redirect this client follows. Run against
+/// `TESSARIDB_TEST_CLUSTER=<leader host:port>,<follower host:port>`, a cluster
+/// whose namespace `prod` holds database `shop` with collection `ledger`;
+/// without it there is no cluster to ask, and the test says so and passes.
+#[tokio::test]
+async fn a_live_cluster_sends_a_misrouted_write_and_read_to_the_leader() {
+    let Ok(cluster) = std::env::var("TESSARIDB_TEST_CLUSTER") else {
+        eprintln!("TESSARIDB_TEST_CLUSTER is not set; no cluster to follow redirects on");
+        return;
+    };
+    let (leader, follower) = cluster.split_once(',').expect("leader,follower");
+    let node_of = |answers: Vec<Answer>| match the_value(&answers) {
+        Value::Object(fields) => fields.get("node").cloned(),
+        other => panic!("session::context() answered {other:?}"),
+    };
+    let mut on_leader = Client::connect(leader).await.unwrap();
+    let leader_node = node_of(
+        on_leader
+            .run("RETURN session::context();", None)
+            .await
+            .unwrap(),
+    );
+    let key = format!("rust{}", std::process::id());
+    let tenancy = "USE NAMESPACE prod; USE DATABASE shop;";
+
+    // A write sent to the follower lands on the leader: a follower that may
+    // not write forwards it there, and one in a range another node leads
+    // redirects it (the scripted tests above cover the redirect itself).
+    let mut client = Client::connect(follower).await.unwrap();
+    let follower_node = node_of(
+        client
+            .run("RETURN session::context();", None)
+            .await
+            .unwrap(),
+    );
+    assert_ne!(leader_node, follower_node, "two nodes");
+    // A forward carries the script and not the session, so the tenancy
+    // travels in the same script as the write.
+    client
+        .run(
+            &format!("{tenancy} CREATE ledger:'{key}' = {{ total: 1 }};"),
+            None,
+        )
+        .await
+        .unwrap();
+    on_leader.run(tenancy, None).await.unwrap();
+    let read = on_leader
+        .run(&format!("SELECT * FROM ledger:'{key}';"), None)
+        .await
+        .unwrap();
+    assert!(
+        matches!(read.last(), Some(Answer::Records { records, .. }) if records.len() == 1),
+        "the write landed on the leader: {read:?}"
+    );
+
+    // A read only the leader may answer is transient: answered, and the
+    // connection stays on the follower.
+    let mut reader = Client::connect(follower).await.unwrap();
+    reader.run(tenancy, None).await.unwrap();
+    let answered = reader
+        .run(
+            &format!("SELECT * FROM ledger:'{key}' ANSWERED BY LEADER;"),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(answered.last(), Some(Answer::Records { records, .. }) if records.len() == 1),
+        "the leader answered: {answered:?}"
+    );
+    let still_on = node_of(
+        reader
+            .run("RETURN session::context();", None)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        still_on, follower_node,
+        "a transient redirect left it on the follower"
+    );
+}
