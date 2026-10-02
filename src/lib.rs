@@ -36,11 +36,15 @@
 //! instead. Skipping it is correct and slow, and nothing about the slowness
 //! points at its cause — which is the only reason it is mentioned this early.
 //!
-//! # There is no TLS on this protocol
+//! # TLS, or a network you trust
 //!
-//! Credentials travel as they are given. A node belongs on a network you protect
-//! or behind something that terminates TLS. This is said here rather than left to
-//! be discovered.
+//! A node given a certificate speaks TLS 1.3 on both ports and nothing else, and
+//! a cluster node serves clients in the clear only when its operator chose to.
+//! [`Client::connect_tls`] and [`Operations::with_tls`] take a [`Tls`] saying
+//! whom to trust, and check the node's certificate and name on every
+//! connection — there is no switch that skips either. [`Client::connect`] and a
+//! plain [`Operations`] send credentials as they are given, which belongs on a
+//! network you protect.
 //!
 //! # Example
 //!
@@ -90,6 +94,8 @@ mod client;
 mod consumer;
 mod error;
 mod feed;
+#[cfg(feature = "tls")]
+mod tls;
 mod vault;
 
 pub use crate::cache::{Lease, Space, Ttl};
@@ -97,6 +103,11 @@ pub use crate::client::Client;
 pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
 pub use crate::feed::Feed;
+#[cfg(feature = "tls")]
+pub use crate::tls::Tls;
+/// A connection to a node over TLS, as [`Client::connect_tls`] holds it.
+#[cfg(feature = "tls")]
+pub type Secured = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 pub use crate::geometry::{Geometry, Polygon, Position, Ring};
 pub use crate::http::{Bucket, Condition, Operations, Series};
 pub use crate::mapping::{FromRecord, FromValue, MappingFault, Row};

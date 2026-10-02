@@ -40,6 +40,20 @@ thiserror = "2"
 # this brings a reader and not a derive (ADR-SDK-0004). Measured tree: serde_json
 # pulls serde_core, itoa, memchr and zmij, none of them proc-macro.
 serde_json = "1"
+# TLS to a node (protocol §1.1, ADR-SDK-0006): rustls on the `ring` provider —
+# pure Rust beside one C-free assembly crate, no OpenSSL and no aws-lc toolchain.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
+# The operating system's certificate store, for a node whose certificate a public
+# authority issued. Off by default: it reaches into each platform's keychain.
+rustls-native-certs = { version = "0.8", optional = true }
+
+[features]
+# On by default, because a cluster node refuses clients in the clear unless its
+# operator chose otherwise: a client without TLS cannot reach a default cluster.
+default = ["tls"]
+tls = ["dep:rustls", "dep:tokio-rustls"]
+platform-roots = ["tls", "dep:rustls-native-certs"]
 
 [dev-dependencies]
 # `sync` is here and deliberately not above: the real-node tests serialise the
@@ -54,6 +68,10 @@ tokio = { version = "1", features = [
     "time",
     "sync",
 ] }
+
+# The TLS tests mint their certificate authority in memory, so no key is ever
+# written to this repository.
+rcgen = "0.13"
 
 [lints.rust]
 missing_docs = "warn"

@@ -69,7 +69,15 @@ pub struct Operations {
     credential: Option<Credential>,
     session: Option<String>,
     attempts: u8,
+    /// Whom the node is trusted by, when it is reached over TLS.
+    #[cfg(feature = "tls")]
+    tls: Option<crate::Tls>,
 }
+
+/// One HTTP connection: a socket, or TLS on one.
+trait Duplex: tokio::io::AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T: tokio::io::AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
 
 /// Who this handle signs in as, and the header that says so.
 ///
@@ -130,6 +138,12 @@ const PAUSE_BETWEEN_ATTEMPTS: std::time::Duration = std::time::Duration::from_mi
 /// one thing the output is being read for.
 impl std::fmt::Debug for Operations {
     fn fmt(&self, form: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Whether requests are encrypted: the first thing to know about a
+        // credential this handle is carrying.
+        #[cfg(feature = "tls")]
+        let secured = self.tls.is_some();
+        #[cfg(not(feature = "tls"))]
+        let secured = false;
         form.debug_struct("Operations")
             .field("address", &self.address)
             .field(
@@ -154,6 +168,7 @@ impl std::fmt::Debug for Operations {
             // unexpectedly — a request that took four times as long as expected
             // is explained by this number and by nothing else visible.
             .field("attempts", &self.attempts)
+            .field("tls", &secured)
             .finish()
     }
 }
@@ -174,6 +189,8 @@ impl Operations {
             credential: None,
             session: None,
             attempts: 1,
+            #[cfg(feature = "tls")]
+            tls: None,
         }
     }
 
@@ -232,6 +249,18 @@ impl Operations {
         // `Option`-returning builder for a value that has an obvious right
         // reading is ceremony.
         self.attempts = if attempts == 0 { 1 } else { attempts };
+        self
+    }
+
+    /// Reach the node over TLS, trusting `tls` (protocol §1.1).
+    ///
+    /// Every request checks the node's certificate against `tls` and its name
+    /// against the host part of the address; a failed handshake is
+    /// [`Error::Tls`], which [`attempts`](Self::attempts) never retries.
+    #[cfg(feature = "tls")]
+    #[must_use]
+    pub fn with_tls(mut self, tls: crate::Tls) -> Self {
+        self.tls = Some(tls);
         self
     }
 
@@ -788,9 +817,16 @@ impl Operations {
         path: &str,
         body: Option<&[u8]>,
         presenting: Presenting,
-    ) -> Result<BufReader<TcpStream>> {
-        let mut stream = TcpStream::connect(&self.address).await?;
-        stream.set_nodelay(true)?;
+    ) -> Result<BufReader<Box<dyn Duplex>>> {
+        let socket = TcpStream::connect(&self.address).await?;
+        socket.set_nodelay(true)?;
+        #[cfg(feature = "tls")]
+        let mut stream: Box<dyn Duplex> = match &self.tls {
+            Some(tls) => Box::new(tls.http(&self.address, socket).await?),
+            None => Box::new(socket),
+        };
+        #[cfg(not(feature = "tls"))]
+        let mut stream: Box<dyn Duplex> = Box::new(socket);
 
         // `Host` is required of an HTTP/1.1 request, and `Connection: close`
         // says this connection carries one exchange — which is true, and saying

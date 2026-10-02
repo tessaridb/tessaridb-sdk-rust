@@ -49,6 +49,17 @@ impl Dial<TcpStream> {
     }
 }
 
+#[cfg(feature = "tls")]
+impl Dial<crate::Secured> {
+    /// Over TLS with the same trust, greeting as [`Client::connect_tls`] does.
+    pub(super) fn tls(tls: crate::Tls) -> Self {
+        Self(Arc::new(move |endpoint| {
+            let tls = tls.clone();
+            Box::pin(async move { Client::connect_tls(&endpoint, &tls).await })
+        }))
+    }
+}
+
 impl<S> Clone for Dial<S> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))

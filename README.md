@@ -198,6 +198,31 @@ not a mystery.
   should run this is over there* (a write to a range another node leads, a read
   it cannot meet), the request is sent there (below).
 
+## TLS
+
+A node started with a certificate speaks TLS 1.3 on both ports and nothing
+else, and a cluster node serves clients in the clear only when its operator
+chose to (node `0.21.0-beta` and later). Give the client the certificate
+authority that issued the node's certificate:
+
+```rust
+use tessaridb_client::{Client, Operations, Tls};
+
+let tls = Tls::trusting_pem(&std::fs::read("ca.pem")?)?;
+let mut client = Client::connect_tls("db.example:9080", &tls).await?;
+let node = Operations::at("db.example:8000").with_tls(tls);
+```
+
+Every connection checks the node's certificate chain against that trust and its
+name against the host you dialled — a DNS name, or an IP address against the
+certificate's IP entries — including each node a redirect sends the request
+to. There is no switch that skips either check. A failed handshake is
+`Error::Tls`, which is never retried: nothing about a second attempt at the same
+node would differ. `Tls::platform()` trusts the operating system's store instead,
+with the `platform-roots` feature. TLS is the default feature `tls`;
+`default-features = false` builds a client without rustls, which reaches only a
+node serving in the clear.
+
 ## Following a redirect
 
 A clustered node that cannot run a request names the node that can, in a frame

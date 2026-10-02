@@ -18,6 +18,15 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
 
+    /// TLS with the node failed: the handshake, its name, its chain.
+    ///
+    /// The protocol's transport class (§1.1, §6) and deliberately not
+    /// [`Error::Io`]: nothing about the next attempt at the same node would
+    /// differ, so it is never retried — a retry loop matching `Io` must not see
+    /// it. The TLS library's own words are carried through.
+    #[error("TLS with that node failed: {0}")]
+    Tls(String),
+
     /// Whatever answered is not one of these nodes.
     ///
     /// The greeting did not begin with the expected magic, so nothing further is
