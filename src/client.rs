@@ -68,6 +68,31 @@ impl Client<TcpStream> {
     }
 }
 
+#[cfg(feature = "tls")]
+impl Client<crate::Secured> {
+    /// Connect to `address` over TLS, trusting `tls`, and exchange greetings.
+    ///
+    /// The node's certificate must chain to what `tls` trusts and carry the
+    /// host part of `address`. A redirect is followed with the same trust, so a
+    /// node it names is checked exactly as this one was.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::connect`], and [`Error::Tls`] when the handshake fails.
+    pub async fn connect_tls(address: &str, tls: &crate::Tls) -> Result<Self> {
+        let socket = TcpStream::connect(address).await?;
+        socket.set_nodelay(true)?;
+        let mut stream = tls.wire(address, socket).await?;
+        let peer_minor = Some(frame::greet(&mut stream).await?);
+        Ok(Self {
+            stream,
+            peer_minor,
+            dial: Some(Dial::tls(tls.clone())),
+            signed: None,
+        })
+    }
+}
+
 impl<S> Client<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
