@@ -140,3 +140,30 @@ fn hex(bytes: &[u8]) -> String {
         out
     })
 }
+
+/// `frames-v1.json`, key `refusal`: every Refusal body (protocol §3.6) reads as
+/// its class — a word, `unknown` for byte 0, or none from an older node — and its
+/// message, through the same reader every refusal this client receives goes
+/// through.
+#[test]
+fn every_refusal_vector_reads_as_its_class_and_message() {
+    let corpus = read_corpus("frames-v1.json");
+    let cases = corpus["refusal"].as_array().expect("a refusal list");
+    assert!(cases.len() >= 12, "the corpus holds every case it should");
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or_default();
+        let body = hex_to_bytes(case["body_hex"].as_str().unwrap_or_default());
+        let want = &case["decoded"];
+        let (class, message) = tessaridb_client::protocol::read_refusal(&body);
+        assert_eq!(
+            class.map(tessaridb_client::RefusalClass::word),
+            want["class"].as_str(),
+            "{name}"
+        );
+        assert_eq!(
+            message,
+            want["message"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+    }
+}

@@ -62,12 +62,8 @@ where
             // may not see — with its own words rather than with silence.
             Some((Kind::Refusal, body)) => {
                 self.finished = true;
-                Err(match String::from_utf8(body) {
-                    Ok(message) => Error::Refused { message },
-                    Err(_) => Error::Refused {
-                        message: "the node refused, in bytes this client could not read".to_owned(),
-                    },
-                })
+                let (class, message) = crate::refusal::read(&body);
+                Err(Error::Refused { message, class })
             }
             Some((other, _)) => {
                 self.finished = true;

@@ -250,7 +250,7 @@ async fn a_refusal_carries_the_nodes_own_words() {
         .await
         .expect_err("a refusal should surface");
     match error {
-        Error::Refused { message } => assert_eq!(message, "no such table: widgets"),
+        Error::Refused { message, .. } => assert_eq!(message, "no such table: widgets"),
         other => panic!("expected Refused, got {other:?}"),
     }
 }
@@ -391,7 +391,7 @@ fn a_records_outcome_from_a_node_that_predates_these_fields_reads_as_silence() {
     else {
         panic!("expected one Records outcome, got {answers:?}");
     };
-    assert!(notes.is_empty());
+    assert_eq!(notes.as_slice(), []);
     assert!(!*only);
     // And the field where that rule stops. An empty note list and a node that
     // predates notes are the same claim, so they are not told apart. Exactness

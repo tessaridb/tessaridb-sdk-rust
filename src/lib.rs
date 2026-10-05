@@ -94,6 +94,7 @@ mod client;
 mod consumer;
 mod error;
 mod feed;
+mod refusal;
 #[cfg(feature = "tls")]
 mod tls;
 mod vault;
@@ -103,6 +104,7 @@ pub use crate::client::Client;
 pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
 pub use crate::feed::Feed;
+pub use crate::refusal::RefusalClass;
 #[cfg(feature = "tls")]
 pub use crate::tls::Tls;
 /// A connection to a node over TLS, as [`Client::connect_tls`] holds it.
@@ -131,6 +133,14 @@ pub use crate::wire::redirect::{Redirect, Settlement};
 /// become a protocol break, and it only stays cheap while these bytes are a
 /// constant rather than a string typed in several files.
 pub mod protocol {
+    /// A Refusal frame's body read as its class and its message (§3.6): what
+    /// every refusal this client receives goes through, for a caller reading
+    /// frames itself.
+    #[must_use]
+    pub fn read_refusal(body: &[u8]) -> (Option<crate::RefusalClass>, String) {
+        crate::refusal::read(body)
+    }
+
     /// What every connection says first, in both directions.
     pub const GREETING: &[u8; 4] = b"TESS";
 
@@ -149,9 +159,10 @@ pub mod protocol {
     /// read. Decoding is already safe without it — an unknown outcome is stepped
     /// over by its length, and an unknown frame kind closes the connection.
     ///
-    /// `2`: this client reads the redirect frame minor 1 introduced and sends
-    /// the vault frame minor 2 introduced.
-    pub const MINOR: u8 = 2;
+    /// `3`: this client reads the redirect frame minor 1 introduced, sends the
+    /// vault frame minor 2 introduced, and reads the class minor 3 puts before a
+    /// refusal's words.
+    pub const MINOR: u8 = 3;
 
     /// The largest frame this client will read — or send.
     ///

@@ -179,7 +179,7 @@ where
         };
         match kind {
             Kind::Answer => decode_answers(&body).map(Exchanged::Answers),
-            Kind::Refusal => Err(refusal(body)),
+            Kind::Refusal => Err(refusal(&body)),
             Kind::Elsewhere => Redirect::decode(&body).map(Exchanged::Elsewhere),
             // A node does not send a request, and a change only arrives on a
             // connection that asked to follow — which this one has not.
@@ -208,7 +208,7 @@ where
                 Some(Answer::Value { value, .. }) => Ok(value),
                 _ => Err(Error::Malformed),
             },
-            Kind::Refusal => Err(refusal(answer)),
+            Kind::Refusal => Err(refusal(&answer)),
             Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault | Kind::Elsewhere => {
                 Err(Error::UnknownFrame { tag: kind.tag() })
             }
@@ -230,18 +230,12 @@ where
 /// The node minor at which the vault frame exists (protocol §2.3).
 const VAULT_MINOR: u8 = 2;
 
-/// A refusal body is the node's own message, as the whole body.
+/// A refusal body: the class byte when the node sent one, then its own words.
 ///
-/// Carried through verbatim: the node already writes messages that name the
-/// place in the script, and rewording them here would make this crate a second
-/// author for one error.
-fn refusal(body: Vec<u8>) -> Error {
-    match String::from_utf8(body) {
-        Ok(message) => Error::Refused { message },
-        // A refusal this client cannot read is still a refusal. Reporting it as
-        // malformed would hide the one fact that is certain.
-        Err(_) => Error::Refused {
-            message: "the node refused, in bytes this client could not read".to_owned(),
-        },
-    }
+/// The words are carried through verbatim: the node already writes messages
+/// that name the place in the script, and rewording them here would make this
+/// crate a second author for one error.
+fn refusal(body: &[u8]) -> Error {
+    let (class, message) = crate::refusal::read(body);
+    Error::Refused { message, class }
 }

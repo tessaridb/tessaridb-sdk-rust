@@ -48,14 +48,21 @@ This client's version is **its own** and never tracks the engine's. A fix here
 would otherwise force an invented engine release, and an engine release would
 force five invented client releases.
 
-What has to match is the **protocol**. This release speaks **protocol 1.2** — it
-reads the redirect frame of minor 1 and sends the vault frame of minor 2, the
-latter only to a node that announces minor 2 (node `0.17.0-beta` and later) — and
+What has to match is the **protocol**. This release speaks **protocol 1.3** — it
+reads the redirect frame of minor 1 and the refusal class of minor 3, and sends
+the vault frame of minor 2, the latter only to a node that announces minor 2 (node `0.17.0-beta` and later) — and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
 like corruption. A differing *minor* is not a refusal: the peer's minor is
 reported so a caller can decline to send what an older node cannot read.
+
+**A refusal says what to do next.** From protocol 1.3 every refusal carries a
+class — `invalid`, `unauthenticated`, `forbidden`, `throttled`, `elsewhere`,
+`retry`, `conflict`, `unavailable` or `internal` — as one byte on the wire and as
+`code` in an HTTP error body. It is `class` on `Error::Refused` and `Error::HttpRefused` — `None` from a node before 1.3, which sends words only. Branch on the
+class, never on the message: the message is prose and changes between releases.
+A class this build does not know reads as `unknown`, which is not retriable.
 
 
 ## Status
@@ -73,7 +80,7 @@ reported so a caller can decline to send what an older node cannot read.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
   talks to is pre-1.0.
 
-It implements **protocol 1.2**: a two-number version where only a differing
+It implements **protocol 1.3**: a two-number version where only a differing
 major is a refusal, and an outcome kind this build has never seen is stepped over
 by its length rather than ending the read.
 
