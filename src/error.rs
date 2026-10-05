@@ -100,6 +100,9 @@ pub enum Error {
     Refused {
         /// The node's own words.
         message: String,
+        /// What to do about it (protocol §3.6): `None` from a node before
+        /// protocol 1.3, which sends words only.
+        class: Option<crate::RefusalClass>,
     },
 
     /// An HTTP route refused, and the status is how a caller tells why.
@@ -122,6 +125,10 @@ pub enum Error {
         status: u16,
         /// The node's sentence, unwrapped from the JSON that carried it.
         message: String,
+        /// The class the body's `code` names (protocol §5.4): `None` from a
+        /// node before protocol 1.3, or from something in between that answered
+        /// in its own words.
+        class: Option<crate::RefusalClass>,
     },
 
     /// A batch for [`Series::append`](crate::Series::append) holds something an

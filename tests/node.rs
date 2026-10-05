@@ -211,7 +211,18 @@ async fn a_node_that_is_really_running_completes_the_greeting() {
     // wrong version is refused, so reaching this line at all means the magic, the
     // major and the minor were what this client believes them to be — against the
     // node itself rather than against a fixture repeating the belief back.
-    let _client = node.client().await;
+    let mut client = node.client().await;
+
+    // And the minor this client announced is the one that earns a class: the
+    // node sends the class byte only to a greeting of minor 3 or later.
+    match client.run("SELEKT * FROM nothing;", None).await {
+        Err(Error::Refused { class, .. }) => assert_eq!(
+            class,
+            Some(tessaridb_client::RefusalClass::Invalid),
+            "a statement the node cannot read is classed invalid"
+        ),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1026,12 +1037,22 @@ async fn a_refusal_carries_the_status_and_not_the_json_that_wrapped_it() {
         .await
         .expect_err("a bucket name the node will not accept must not succeed");
 
-    let Error::HttpRefused { status, message } = refused else {
+    let Error::HttpRefused {
+        status,
+        message,
+        class,
+    } = refused
+    else {
         panic!("an HTTP refusal should say so and carry its status; got {refused:?}");
     };
     assert_eq!(
         status, 400,
         "the node answers 400 for a name it will not take"
+    );
+    assert_eq!(
+        class,
+        Some(tessaridb_client::RefusalClass::Invalid),
+        "the body's code names the class"
     );
     assert!(
         !message.contains('{') && !message.contains("\"error\""),

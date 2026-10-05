@@ -892,7 +892,17 @@ fn refusal(reply: &Reply) -> Error {
     Error::HttpRefused {
         status: reply.status,
         message: sentence(&reply.body),
+        class: code(&reply.body),
     }
+}
+
+/// The class an error body's `code` names (protocol §5.4), when it has one.
+fn code(body: &[u8]) -> Option<crate::RefusalClass> {
+    serde_json::from_slice::<Json>(body)
+        .ok()?
+        .get("code")?
+        .as_str()
+        .map(crate::RefusalClass::from_word)
 }
 
 /// The node's sentence, unwrapped from the JSON that carried it.
