@@ -5,6 +5,8 @@
 //! The certificate authority is minted in memory for each run, so no key is
 //! ever written to this repository.
 
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::process::{Child, Command, Stdio};
 
 use tessaridb_client::{Answer, Client, Condition, Error, Number, Operations, Tls, Value};
@@ -67,7 +69,15 @@ impl Secured {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("cert.pem"), chain).unwrap();
-        std::fs::write(directory.join("key.pem"), key).unwrap();
+        // The node refuses a key file others may read, so it is never written
+        // readable in the first place.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.join("key.pem"))
+            .and_then(|mut file| file.write_all(key.as_bytes()))
+            .unwrap();
         let files = Files(directory.clone());
 
         let _slot = STARTING.lock().await;
