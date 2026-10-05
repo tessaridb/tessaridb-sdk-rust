@@ -1,0 +1,24 @@
+# Supply-chain policy for `cargo deny check`. It governs what this client may pull
+# in as a dependency; the client itself is Apache-2.0 (see LICENSE).
+
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+]
+private = { ignore = true }
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
