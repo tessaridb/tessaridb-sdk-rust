@@ -183,7 +183,7 @@ where
             Kind::Elsewhere => Redirect::decode(&body).map(Exchanged::Elsewhere),
             // A node does not send a request, and a change only arrives on a
             // connection that asked to follow — which this one has not.
-            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault => {
+            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault | Kind::Progress => {
                 Err(Error::UnknownFrame { tag: kind.tag() })
             }
         }
@@ -209,9 +209,12 @@ where
                 _ => Err(Error::Malformed),
             },
             Kind::Refusal => Err(refusal(&answer)),
-            Kind::Request | Kind::Subscribe | Kind::Change | Kind::Vault | Kind::Elsewhere => {
-                Err(Error::UnknownFrame { tag: kind.tag() })
-            }
+            Kind::Request
+            | Kind::Subscribe
+            | Kind::Change
+            | Kind::Vault
+            | Kind::Elsewhere
+            | Kind::Progress => Err(Error::UnknownFrame { tag: kind.tag() }),
         }
     }
 
@@ -221,7 +224,21 @@ where
     /// socket delivering changes is not also answering scripts, and a type that
     /// let a caller try would be promising a multiplexing this protocol does not
     /// do. A caller that wants both opens two connections.
+    ///
+    /// A condition ([`Follow::matching`]) is sent only to a node of minor 4 or
+    /// later: an older one reads past it and sends every change, which is the
+    /// wrong answer and a silent one, so this refuses with
+    /// [`Error::NodeTooOld`] before writing anything.
     pub async fn follow(mut self, asked: &Follow) -> Result<Feed<S>> {
+        if asked.condition.is_some()
+            && let Some(found) = self.peer_minor
+            && found < CONDITION_MINOR
+        {
+            return Err(Error::NodeTooOld {
+                found,
+                needed: CONDITION_MINOR,
+            });
+        }
         frame::write(&mut self.stream, Kind::Subscribe, &asked.encode()).await?;
         Ok(Feed::new(self.stream))
     }
@@ -229,6 +246,9 @@ where
 
 /// The node minor at which the vault frame exists (protocol §2.3).
 const VAULT_MINOR: u8 = 2;
+
+/// The node minor that reads a feed's condition (protocol §2.3, §3.7).
+const CONDITION_MINOR: u8 = 4;
 
 /// A refusal body: the class byte when the node sent one, then its own words.
 ///

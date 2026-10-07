@@ -56,7 +56,7 @@ use std::time::Duration;
 
 use tessaridb_client::query::{Order, Select, field as on_field};
 use tessaridb_client::{
-    Answer, Became, Bucket, Change, Client, Condition, Error, Feed, Follow, FromRecord,
+    Answer, Arrival, Became, Bucket, Change, Client, Condition, Error, Feed, Follow, FromRecord,
     MappingFault, Number, Operations, Row, Value,
 };
 
@@ -459,8 +459,16 @@ const CHANGE_BUDGET: Duration = Duration::from_secs(10);
 /// asymmetry is real and the fix is one word, but it changes published API and
 /// this test was written for something else.
 async fn next_change(feed: &mut Feed<tokio::net::TcpStream>) -> Change {
+    match next_arrival(feed).await {
+        Arrival::Change(change) => change,
+        other => panic!("a feed with no condition sent {other:?}"),
+    }
+}
+
+/// The next thing a feed hands over, or a failure naming the budget it outlived.
+async fn next_arrival(feed: &mut Feed<tokio::net::TcpStream>) -> Arrival {
     match tokio::time::timeout(CHANGE_BUDGET, feed.next()).await {
-        Ok(Ok(Some(change))) => change,
+        Ok(Ok(Some(arrival))) => arrival,
         Ok(Ok(None)) => panic!("the feed ended before the change arrived"),
         Ok(Err(error)) => panic!("the feed failed: {error}"),
         Err(elapsed) => panic!("no change arrived within {CHANGE_BUDGET:?} ({elapsed})"),
@@ -567,6 +575,70 @@ async fn the_table_filter_excludes_a_table_it_was_not_given() {
         );
         if change.table == "users" && change.id == "1" {
             break;
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs the shipped binary; run with --ignored and TESSARIDB_BIN set"]
+async fn a_narrowed_feed_sends_the_match_the_leaving_and_how_far_it_read() {
+    // Protocol §3.7 and §3.15 against a node of minor 4: the feed holds exactly
+    // the records the condition matches — one that stops matching arrives as a
+    // removal — and a run of skipped changes is told as a Progress, so the
+    // resume point keeps up with the log.
+    let node = Node::start().await;
+    let mut writer = node.client().await;
+    writer
+        .run(PREAMBLE, None)
+        .await
+        .expect("the preamble should be accepted");
+    let mut watcher = node.client().await;
+    watcher
+        .run(USE_CONTEXT, None)
+        .await
+        .expect("the watcher's session context should be accepted");
+    let mut feed = watcher
+        .follow(
+            &Follow::everything()
+                .to_table("users")
+                .matching("age > $least")
+                .binding("least", Value::from(40_i64)),
+        )
+        .await
+        .expect("the narrowed subscription should be accepted");
+
+    for script in [
+        "CREATE users:1 = { name: 'ada', age: 36 };",
+        "CREATE users:2 = { name: 'grace', age: 45 };",
+        "UPDATE users:2 SET age = 30;",
+        "CREATE users:3 = { name: 'alan', age: 20 };",
+    ] {
+        writer
+            .run(script, None)
+            .await
+            .expect("the write is accepted");
+    }
+
+    // A Progress may come whenever the feed idled after a skip — after the
+    // preamble as well as after users:3 — so the changes are read past any.
+    let mut changes = Vec::new();
+    while changes.len() < 2 {
+        if let Arrival::Change(change) = next_arrival(&mut feed).await {
+            changes.push(change);
+        }
+    }
+    let [matched, left] = changes.as_slice() else {
+        unreachable!("two changes were read");
+    };
+    assert_eq!(matched.id, "2", "users:1 does not match and is not sent");
+    assert!(matches!(matched.became, Became::Written(_)));
+    assert_eq!((left.id.as_str(), &left.became), ("2", &Became::Removed));
+    // users:3 is skipped, and the feed says how far it read past the removal.
+    loop {
+        match next_arrival(&mut feed).await {
+            Arrival::Progress(read) if read.sequence > left.sequence => break,
+            Arrival::Progress(_) => {}
+            other => panic!("only users:3, which does not match, follows: {other:?}"),
         }
     }
 }

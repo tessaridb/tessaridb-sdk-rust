@@ -527,3 +527,155 @@ fn notes_without_the_flag_behind_them_still_read_and_the_flag_is_false() {
     assert_eq!(notes.len(), 1);
     assert!(!*only);
 }
+
+/// The bytes of a `bytes` field: a `u32` length, then the bytes.
+fn bytes_field(bytes: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(bytes.len())
+        .expect("a test field is small")
+        .to_be_bytes()
+        .to_vec();
+    out.extend_from_slice(bytes);
+    out
+}
+
+#[test]
+fn a_condition_is_written_after_an_empty_cursor_with_its_parameters_as_one_object() {
+    use tessaridb_client::Follow;
+    use tessaridb_client::codec::encode;
+
+    let asked = Follow::resuming_after(6)
+        .to_table("orders")
+        .matching("total > $least")
+        .binding("least", Value::from(100_i64));
+
+    let mut want = 7_u64.to_be_bytes().to_vec();
+    want.push(1);
+    want.extend_from_slice(&text("orders"));
+    // No cursor was asked for, and a condition needs its place filled (§3.7).
+    want.extend_from_slice(&text(""));
+    want.extend_from_slice(&text("total > $least"));
+    let parameters = Value::Object(
+        [("least".to_owned(), Value::from(100_i64))]
+            .into_iter()
+            .collect(),
+    );
+    want.extend_from_slice(&bytes_field(&encode(&parameters)));
+    assert_eq!(asked.encode(), want);
+
+    // A condition with no parameters still sends the object, empty.
+    let bare = Follow::everything().to_table("orders").matching("open");
+    let mut want = 0_u64.to_be_bytes().to_vec();
+    want.push(1);
+    want.extend_from_slice(&text("orders"));
+    want.extend_from_slice(&text(""));
+    want.extend_from_slice(&text("open"));
+    want.extend_from_slice(&bytes_field(&encode(&Value::Object(
+        std::collections::BTreeMap::new(),
+    ))));
+    assert_eq!(bare.encode(), want);
+
+    // A resumed split feed keeps its cursor ahead of the condition.
+    let split = Follow::resuming_at("1.1:d=12")
+        .to_table("orders")
+        .matching("open");
+    let mut want = 0_u64.to_be_bytes().to_vec();
+    want.push(1);
+    want.extend_from_slice(&text("orders"));
+    want.extend_from_slice(&text("1.1:d=12"));
+    want.extend_from_slice(&text("open"));
+    want.extend_from_slice(&bytes_field(&encode(&Value::Object(
+        std::collections::BTreeMap::new(),
+    ))));
+    assert_eq!(split.encode(), want);
+
+    // And a feed with no condition is the frame every earlier client sends.
+    let mut plain = 7_u64.to_be_bytes().to_vec();
+    plain.push(1);
+    plain.extend_from_slice(&text("orders"));
+    assert_eq!(Follow::resuming_after(6).to_table("orders").encode(), plain);
+}
+
+#[tokio::test]
+async fn a_narrowed_feed_hands_over_progress_as_its_own_item_beside_changes() {
+    use tessaridb_client::{Arrival, Became, Follow, Progress};
+
+    let (ours, mut theirs) = tokio::io::duplex(4096);
+    let node = tokio::spawn(async move {
+        let (kind, _) = frame::read(&mut theirs).await.unwrap().unwrap();
+        assert_eq!(kind, Kind::Subscribe);
+        let mut progress = 41_u64.to_be_bytes().to_vec();
+        progress.extend_from_slice(&text("1.1:d=12"));
+        frame::write(&mut theirs, Kind::Progress, &progress)
+            .await
+            .unwrap();
+        let mut change = 42_u64.to_be_bytes().to_vec();
+        change.extend_from_slice(&text("orders"));
+        change.extend_from_slice(&text("7"));
+        change.push(1);
+        frame::write(&mut theirs, Kind::Change, &change)
+            .await
+            .unwrap();
+    });
+    let mut feed = Client::with_stream(ours)
+        .follow(&Follow::everything().to_table("orders").matching("open"))
+        .await
+        .unwrap();
+    assert_eq!(
+        feed.next().await.unwrap(),
+        Some(Arrival::Progress(Progress {
+            sequence: 41,
+            cursor: Some("1.1:d=12".to_owned()),
+        })),
+        "a skipped run is told, so the resume point keeps up"
+    );
+    let Some(Arrival::Change(change)) = feed.next().await.unwrap() else {
+        panic!("the change after the progress");
+    };
+    assert_eq!((change.sequence, change.became), (42, Became::Removed));
+    node.await.unwrap();
+    assert_eq!(feed.next().await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_condition_is_not_sent_to_a_node_before_minor_four() {
+    use tessaridb_client::Follow;
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let older = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut greeting = [0_u8; 6];
+        socket.read_exact(&mut greeting).await.unwrap();
+        socket.write_all(b"TESS\x01\x03").await.unwrap();
+        // An older node reads past a condition and sends every change: the
+        // client must not send one at all.
+        let mut after = Vec::new();
+        socket.read_to_end(&mut after).await.unwrap();
+        after
+    });
+    let bound = std::time::Duration::from_secs(10);
+    let client = tokio::time::timeout(bound, Client::connect(address))
+        .await
+        .expect("connecting took longer than the bound")
+        .unwrap();
+    let refused = client
+        .follow(&Follow::everything().to_table("orders").matching("open"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::NodeTooOld {
+                found: 3,
+                needed: 4
+            }
+        ),
+        "{refused:?}"
+    );
+    let sent = tokio::time::timeout(bound, older)
+        .await
+        .expect("the fake node never saw the connection close")
+        .unwrap();
+    assert!(sent.is_empty(), "the client sent a frame the node misreads");
+}

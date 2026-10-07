@@ -19,7 +19,7 @@ use tokio::io::AsyncRead;
 
 use crate::error::{Error, Result};
 use crate::wire::frame::{self, Kind};
-use crate::wire::push::Change;
+use crate::wire::push::{Arrival, Change, Progress};
 
 /// A stream of changes on a connection that asked to follow.
 #[derive(Debug)]
@@ -39,12 +39,13 @@ where
         }
     }
 
-    /// The next change, or `None` when the node closed the stream.
+    /// The next change — or, on a feed that named a condition, how far it read
+    /// — or `None` when the node closed the stream.
     ///
     /// `None` is not an error and not the end of the data — it is this
     /// connection ending. The changes after it are still in the log, and a new
     /// subscription resuming after the last handled sequence will deliver them.
-    pub async fn next(&mut self) -> Result<Option<Change>> {
+    pub async fn next(&mut self) -> Result<Option<Arrival>> {
         // Once the stream has ended, keep saying so rather than reading a closed
         // socket again — the second read's error would be about the socket
         // rather than about what happened.
@@ -56,7 +57,12 @@ where
                 self.finished = true;
                 Ok(None)
             }
-            Some((Kind::Change, body)) => Change::decode(&body).map(Some),
+            Some((Kind::Change, body)) => {
+                Change::decode(&body).map(|change| Some(Arrival::Change(change)))
+            }
+            Some((Kind::Progress, body)) => {
+                Progress::decode(&body).map(|progress| Some(Arrival::Progress(progress)))
+            }
             // A refusal can still arrive here: the node answers a subscription
             // it will not serve — an unwatchable table, or a tenancy the caller
             // may not see — with its own words rather than with silence.
