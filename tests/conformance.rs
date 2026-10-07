@@ -167,3 +167,38 @@ fn every_refusal_vector_reads_as_its_class_and_message() {
         );
     }
 }
+
+/// `frames-v1.json`, key `progress`: every Progress body (protocol §3.15)
+/// decodes to exactly its sequence and cursor, and every `malformed` one is
+/// refused as malformed.
+#[test]
+fn every_progress_vector_decodes_exactly_or_is_refused() {
+    let corpus = read_corpus("frames-v1.json");
+    let cases = corpus["progress"].as_array().expect("a progress list");
+    assert!(cases.len() >= 5, "the corpus holds every case it should");
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or_default();
+        let decoded = tessaridb_client::Progress::decode(&hex_to_bytes(
+            case["body_hex"].as_str().unwrap_or_default(),
+        ));
+        if case.get("malformed").is_some() {
+            assert!(
+                matches!(decoded, Err(Error::Malformed | Error::Truncated)),
+                "{name}: {decoded:?}"
+            );
+            continue;
+        }
+        let want = &case["decoded"];
+        let progress = decoded.unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert_eq!(
+            progress.sequence.to_string(),
+            want["sequence"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+        assert_eq!(
+            progress.cursor.as_deref(),
+            want["cursor"].as_str(),
+            "{name}"
+        );
+    }
+}

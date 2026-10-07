@@ -48,9 +48,11 @@ This client's version is **its own** and never tracks the engine's. A fix here
 would otherwise force an invented engine release, and an engine release would
 force five invented client releases.
 
-What has to match is the **protocol**. This release speaks **protocol 1.3** — it
-reads the redirect frame of minor 1 and the refusal class of minor 3, and sends
-the vault frame of minor 2, the latter only to a node that announces minor 2 (node `0.17.0-beta` and later) — and
+What has to match is the **protocol**. This release speaks **protocol 1.4** — it
+reads the redirect frame of minor 1 and the refusal class of minor 3, sends
+the vault frame of minor 2 only to a node that announces minor 2 (node `0.17.0-beta` and later), and sends a feed's
+condition and reads the progress frame of minor 4 only with a node that announces minor 4 (node `0.33.0-beta` and
+later) — and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
@@ -70,7 +72,8 @@ A class this build does not know reads as `unknown`, which is not retriable.
 **Stage: active development · on crates.io as `tessaridb-client`.**
 
 - ✅ **Runs:** the wire half — connect, run statements with bound parameters,
-  decode every value type, subscribe to changes, and build the four common
+  decode every value type, subscribe to changes — narrowed by a condition, from
+  node `0.33.0-beta` — and build the four common
   statements, including `STALENESS` and `ANSWERED BY`.
 - ✅ **Runs:** the HTTP half — health, readiness, metrics, sessions, credentials,
   backup, writing, sizing, reading and deleting a file in a bucket, and
@@ -80,7 +83,7 @@ A class this build does not know reads as `unknown`, which is not retriable.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
   talks to is pre-1.0.
 
-It implements **protocol 1.3**: a two-number version where only a differing
+It implements **protocol 1.4**: a two-number version where only a differing
 major is a refusal, and an outcome kind this build has never seen is stepped over
 by its length rather than ending the read.
 
@@ -107,7 +110,7 @@ for as long as you care to listen, which is the workload a thread is the wrong
 unit for — and it is the workload this client exists for.
 
 ```rust
-use tessaridb_client::{Client, Follow, Value};
+use tessaridb_client::{Arrival, Client, Follow, Value};
 
 // An address is a host and a port, not a URL: the connection is a TCP socket
 // carrying the wire protocol, and a scheme would imply a negotiation that does
@@ -129,8 +132,10 @@ let mut feed = Client::connect("127.0.0.1:9080")
     .follow(&Follow::everything().to_table("users"))
     .await?;
 
-while let Some(change) = feed.next().await? {
-    println!("{} {} at {}", change.table, change.id, change.sequence);
+while let Some(arrival) = feed.next().await? {
+    if let Arrival::Change(change) = arrival {
+        println!("{} {} at {}", change.table, change.id, change.sequence);
+    }
 }
 ```
 

@@ -44,6 +44,8 @@ pub enum Kind {
     /// passphrase a field of its own (protocol §3.14). Numbered 17: the link
     /// nodes use between themselves holds 6-12 and 14-16.
     Vault,
+    /// How far a feed that named a condition read (protocol §3.15, minor 4).
+    Progress,
 }
 
 impl Kind {
@@ -58,6 +60,7 @@ impl Kind {
             Self::Change => 5,
             Self::Elsewhere => 13,
             Self::Vault => 17,
+            Self::Progress => 37,
         }
     }
 
@@ -72,6 +75,7 @@ impl Kind {
             5 => Some(Self::Change),
             13 => Some(Self::Elsewhere),
             17 => Some(Self::Vault),
+            37 => Some(Self::Progress),
             _ => None,
         }
     }

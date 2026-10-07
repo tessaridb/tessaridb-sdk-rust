@@ -53,7 +53,7 @@
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), tessaridb_client::Error> {
-//! use tessaridb_client::{Client, Follow, Value};
+//! use tessaridb_client::{Arrival, Client, Follow, Value};
 //!
 //! let mut client = Client::connect("127.0.0.1:9080").await?;
 //!
@@ -72,8 +72,10 @@
 //!     .follow(&Follow::everything().to_table("users"))
 //!     .await?;
 //!
-//! while let Some(change) = feed.next().await? {
-//!     println!("{} {} at {}", change.table, change.id, change.sequence);
+//! while let Some(arrival) = feed.next().await? {
+//!     if let Arrival::Change(change) = arrival {
+//!         println!("{} {} at {}", change.table, change.id, change.sequence);
+//!     }
 //! }
 //! # Ok(())
 //! # }
@@ -118,7 +120,7 @@ pub use crate::vault::{Custody, Page, SealState, Vault, VaultStatus};
 pub use crate::wire::message::{
     Answer, Correction, Exact, Names, Note, Parameters, Request, Suggested,
 };
-pub use crate::wire::push::{Became, Change, Follow};
+pub use crate::wire::push::{Arrival, Became, Change, Follow, Progress};
 pub use crate::wire::redirect::{Redirect, Settlement};
 
 /// The protocol constants.
@@ -159,10 +161,11 @@ pub mod protocol {
     /// read. Decoding is already safe without it — an unknown outcome is stepped
     /// over by its length, and an unknown frame kind closes the connection.
     ///
-    /// `3`: this client reads the redirect frame minor 1 introduced, sends the
-    /// vault frame minor 2 introduced, and reads the class minor 3 puts before a
-    /// refusal's words.
-    pub const MINOR: u8 = 3;
+    /// `4`: this client reads the redirect frame minor 1 introduced, sends the
+    /// vault frame minor 2 introduced, reads the class minor 3 puts before a
+    /// refusal's words, and sends a feed's condition and reads the progress
+    /// frame minor 4 introduced.
+    pub const MINOR: u8 = 4;
 
     /// The largest frame this client will read — or send.
     ///

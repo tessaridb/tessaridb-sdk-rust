@@ -1,12 +1,14 @@
 //! Being told rather than asking: what a client subscribes to, and what arrives.
 
-use crate::codec::decode;
+use std::collections::BTreeMap;
+
+use crate::codec::{decode, encode};
 use crate::error::{Error, Result};
 use crate::value::Value;
-use crate::wire::frame::{Body, put_text, put_u64};
+use crate::wire::frame::{Body, put_bytes, put_text, put_u64};
 
 /// What a client asked to follow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Follow {
     /// The first log position to read, **inclusive**.
     ///
@@ -28,6 +30,17 @@ pub struct Follow {
     /// *after* the change that carried this cursor — no `+1` here. Opaque:
     /// store it and send it back, never build one.
     pub cursor: Option<String>,
+    /// Which records of the table to follow — TessariQL, without `WHERE`
+    /// (protocol §3.7, node minor 4).
+    ///
+    /// A write that matches is sent as it is; a write or a removal that takes a
+    /// matching record out of the condition is sent as a removal, so a mirror
+    /// applying the feed holds exactly the matching records. A feed that
+    /// skipped changes says how far it read with a [`Progress`].
+    pub condition: Option<String>,
+    /// The condition's parameters, bound after the node reads it, so a value
+    /// can never become syntax.
+    pub parameters: BTreeMap<String, Value>,
 }
 
 impl Follow {
@@ -38,6 +51,8 @@ impl Follow {
             from: 0,
             table: None,
             cursor: None,
+            condition: None,
+            parameters: BTreeMap::new(),
         }
     }
 
@@ -51,6 +66,8 @@ impl Follow {
             from: sequence.saturating_add(1),
             table: None,
             cursor: None,
+            condition: None,
+            parameters: BTreeMap::new(),
         }
     }
 
@@ -61,6 +78,8 @@ impl Follow {
             from: 0,
             table: None,
             cursor: Some(cursor.into()),
+            condition: None,
+            parameters: BTreeMap::new(),
         }
     }
 
@@ -68,6 +87,24 @@ impl Follow {
     #[must_use]
     pub fn to_table(mut self, table: impl Into<String>) -> Self {
         self.table = Some(table.into());
+        self
+    }
+
+    /// The same subscription, narrowed to the records `condition` holds for.
+    ///
+    /// Needs a table ([`Follow::to_table`]) and a node of minor 4 or later:
+    /// an older node would read past the condition and send every change, so
+    /// [`crate::Client::follow`] refuses to send one there.
+    #[must_use]
+    pub fn matching(mut self, condition: impl Into<String>) -> Self {
+        self.condition = Some(condition.into());
+        self
+    }
+
+    /// Bind a parameter the condition names as `$name`.
+    #[must_use]
+    pub fn binding(mut self, name: impl Into<String>, value: Value) -> Self {
+        self.parameters.insert(name.into(), value);
         self
     }
 
@@ -85,8 +122,16 @@ impl Follow {
         }
         // Last and only when present: a body without it is the frame a node
         // before the cursor existed reads.
-        if let Some(cursor) = &self.cursor {
-            put_text(&mut body, cursor);
+        // A condition comes after the cursor, so it needs the cursor's place
+        // filled: empty text, which is never a cursor a node hands out.
+        match (&self.cursor, &self.condition) {
+            (Some(cursor), _) => put_text(&mut body, cursor),
+            (None, Some(_)) => put_text(&mut body, ""),
+            (None, None) => {}
+        }
+        if let Some(condition) = &self.condition {
+            put_text(&mut body, condition);
+            put_bytes(&mut body, &encode(&Value::Object(self.parameters.clone())));
         }
         body
     }
@@ -165,4 +210,43 @@ impl Change {
             cursor,
         })
     }
+}
+
+/// How far a narrowed feed read (protocol §3.15, node minor 4).
+///
+/// Sent when the feed skipped changes its condition did not hold for and had
+/// nothing to send for a while. Store it as a change's position is stored —
+/// resume with [`Follow::resuming_after`] its `sequence`, or from its `cursor`
+/// on a split table — and nothing is lost or repeated. Ignoring it leaves the
+/// resume point behind the log, where a prune can overtake it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Progress {
+    /// The last change the feed read and did not send.
+    pub sequence: u64,
+    /// On a feed over a split table, where to resume after it.
+    pub cursor: Option<String>,
+}
+
+impl Progress {
+    /// Read one out of a progress frame's body.
+    pub fn decode(body: &[u8]) -> Result<Self> {
+        let mut reader = Body::new(body);
+        let sequence = reader.take_u64()?;
+        let cursor = if reader.remaining() > 0 {
+            Some(reader.take_text()?)
+        } else {
+            None
+        };
+        Ok(Self { sequence, cursor })
+    }
+}
+
+/// What a feed hands over: a change, or how far a narrowed feed read.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Arrival {
+    /// One change, sent because it happened.
+    Change(Change),
+    /// The feed read this far and had nothing to send for it.
+    Progress(Progress),
 }
