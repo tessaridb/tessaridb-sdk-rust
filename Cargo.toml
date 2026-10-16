@@ -2,6 +2,7 @@
 name = "tessaridb-client"
 version = "0.11.0"
 edition = "2024"
+authors = ["boogvar"]
 rust-version = "1.98"
 license = "Apache-2.0"
 description = "Async client for TessariDB"
