@@ -96,6 +96,7 @@ mod client;
 mod consumer;
 mod error;
 mod feed;
+mod queue;
 mod refusal;
 #[cfg(feature = "tls")]
 mod tls;
@@ -106,6 +107,7 @@ pub use crate::client::Client;
 pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
 pub use crate::feed::Feed;
+pub use crate::queue::{Handled, Job, Queue, QueueStopper};
 pub use crate::refusal::RefusalClass;
 #[cfg(feature = "tls")]
 pub use crate::tls::Tls;
