@@ -47,6 +47,7 @@
 
 mod caches;
 mod consumers;
+mod queues;
 mod secured;
 mod support;
 mod vaults;

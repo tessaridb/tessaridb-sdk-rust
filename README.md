@@ -285,6 +285,45 @@ protocol repository's `spec/consumer-v1.md`, which every client follows, and
 `cargo test` renders the statements it sends against all 14 cases of
 `conformance/consumer-v1.json`.
 
+## Taking work from a queue
+
+A queue (`DEFINE QUEUE`, engine `0.35.0` or later for everything below) hands
+each record to one worker under a hold that lapses. A [`Queue`] claims as a
+named worker and settles each record: done deletes it, release hands it back:
+
+```rust
+use tessaridb_client::{Client, Handled, Queue};
+use tessaridb_client::query::field;
+
+let client = Client::connect("127.0.0.1:9080").await?;
+let mut queue = Queue::new(client, ("app", "main"), "jobs", "resizer")?
+    .batch(10)
+    .only(field("kind").eq("image")); // take only the work this worker can do
+
+// Automatic: Ok marks the record done, Err hands it back at once.
+queue.run_auto(|job| async move {
+    println!("{} (attempt {})", job.id(), job.attempts());
+    Ok::<(), std::io::Error>(())
+}).await?;
+
+// Manual: Done, Release(Some(delay)) — the queue needs a NOT BEFORE field —
+// or Leave it for the hold to lapse.
+queue.run_manual(|job| async move { Handled::Done }).await?;
+
+// Or one step at a time.
+let jobs = queue.claim(5, None).await?;
+for job in &jobs {
+    queue.done(job).await?;
+}
+```
+
+Workers on one queue take **different** records: a claim passes over records
+another worker's claim is taking. Work is **at least once** — key an outside
+effect on the queue and `job.id()`. A record whose attempts are spent goes to
+the queue's `DEAD LETTER TO` topic, read with a [`Consumer`]. The behaviour is
+`spec/queue-v1.md`, and `cargo test` renders the statements against all 20 cases
+of `conformance/queue-v1.json`.
+
 ## A space as a cache, a counter and a lock
 
 A space (`DEFINE SPACE`) keeps one value per key with an optional expiry. A

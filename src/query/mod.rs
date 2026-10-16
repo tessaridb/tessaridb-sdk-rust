@@ -97,6 +97,25 @@ pub enum BuildError {
         name: String,
     },
 
+    /// A queue worker name that cannot be written into a statement.
+    ///
+    /// Checked and refused rather than escaped, as a group name is (queue
+    /// contract §3).
+    #[error(
+        "worker {name:?} is not a worker name: 1 to 128 of letters, digits, `_`, `.`, `:` and `-`"
+    )]
+    NotAWorkerName {
+        /// What was supplied.
+        name: String,
+    },
+
+    /// A claim count outside 1 to 500, the most one claim may take.
+    #[error("{count} is not a claim count: claim from 1 to 500 records at a time")]
+    NotACount {
+        /// What was asked for.
+        count: u64,
+    },
+
     /// A statement with nothing to say.
     #[error("{what}")]
     Incomplete {
