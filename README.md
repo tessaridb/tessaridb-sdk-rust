@@ -378,7 +378,9 @@ let secret = vault.reveal("github", &["password"]).await?;
 A vault declared `DEFINE VAULT team PASSPHRASE '…'` opens with its own passphrase
 instead, and the store's opens nothing in it: `vault.status()`, `vault.unseal(…)`,
 `vault.seal()` and `vault.change_passphrase(…)` act on that vault alone, and
-`status().custody` says which kind a vault is. An unseal lasts the node's period
+`status().custody` says which kind a vault is. `vault.declare(…)` creates such a
+vault with the passphrase sent as a field rather than in a script (a node from
+`0.36.1`, protocol minor 6). An unseal lasts the node's period
 (ten minutes unless it was started otherwise) and then closes by itself; a refusal
 after a run of wrong passphrases means **wait**, and is not retried here. The
 statements and frames are the protocol repository's `spec/vault-v1.md`.

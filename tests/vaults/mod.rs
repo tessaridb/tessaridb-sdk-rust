@@ -184,12 +184,16 @@ async fn a_node_without_the_vault_frame_is_refused_before_anything_is_sent() {
 /// the store's: the store's passphrase opens nothing in it.
 async fn a_vault_with_its_own_passphrase(client: &mut Client<tokio::net::TcpStream>) {
     const TEAM: &str = "the team passphrase 5d13";
+    // Declared through the frame, so the passphrase is never script text.
+    let declared = Vault::new(client, ("app", "main"), "own")
+        .unwrap()
+        .declare(TEAM)
+        .await
+        .unwrap();
+    assert_eq!(declared.custody, Some(Custody::Own));
     client
         .run(
-            &format!(
-                "USE NAMESPACE app; USE DATABASE main; DEFINE VAULT own PASSPHRASE '{TEAM}'; \
-                 DEFINE FIELD token ON own TYPE string SECRET;"
-            ),
+            "USE NAMESPACE app; USE DATABASE main; DEFINE FIELD token ON own TYPE string SECRET;",
             None,
         )
         .await
@@ -236,4 +240,53 @@ async fn recipients_come_and_go(vault: &mut Vault<'_, tokio::net::TcpStream>) {
     assert!(vault.recipients("github").await.unwrap().is_empty());
     let refused = vault.remove_recipient("github", "bob").await.unwrap_err();
     assert!(matches!(refused, Error::Refused { .. }), "{refused:?}");
+}
+
+#[tokio::test]
+async fn a_node_without_the_declare_act_is_refused_before_anything_is_sent() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let older = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut theirs = [0_u8; 6];
+        socket.read_exact(&mut theirs).await.unwrap();
+        socket.write_all(b"TESS\x01\x05").await.unwrap();
+        let mut after = Vec::new();
+        socket.read_to_end(&mut after).await.unwrap();
+        after
+    });
+    let bound = std::time::Duration::from_secs(10);
+    let mut client = tokio::time::timeout(bound, Client::connect(address))
+        .await
+        .expect("connecting took longer than the bound")
+        .unwrap();
+    let refused = tokio::time::timeout(
+        bound,
+        Vault::new(&mut client, ("app", "main"), "own")
+            .unwrap()
+            .declare("a passphrase"),
+    )
+    .await
+    .expect("the client waited on a node without the declare act")
+    .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::NodeTooOld {
+                found: 5,
+                needed: 6
+            }
+        ),
+        "{refused:?}"
+    );
+    drop(client);
+    let sent = tokio::time::timeout(bound, older)
+        .await
+        .expect("the fake node never saw the connection close")
+        .unwrap();
+    assert!(
+        sent.is_empty(),
+        "the client sent an act the node cannot read"
+    );
 }

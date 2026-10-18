@@ -75,6 +75,7 @@ fn every_frame_this_client_sends_is_the_corpus_bytes() {
                 current: build["current"].as_str().unwrap(),
                 new: build["new"].as_str().unwrap(),
             },
+            "declare" => Act::Declare(build["passphrase"].as_str().unwrap()),
             other => panic!("an act the corpus does not define: {other}"),
         };
         let place = build["vault"].as_object().map(|vault| Place {
@@ -91,8 +92,8 @@ fn every_frame_this_client_sends_is_the_corpus_bytes() {
         checked += 1;
     }
     assert_eq!(
-        checked, 10,
-        "the corpus holds ten frames without credentials"
+        checked, 11,
+        "the corpus holds eleven frames without credentials"
     );
 }
 

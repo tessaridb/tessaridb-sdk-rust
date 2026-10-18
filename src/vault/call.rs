@@ -15,6 +15,7 @@ pub(crate) enum Act<'a> {
     Unseal(&'a str),
     Seal,
     Change { current: &'a str, new: &'a str },
+    Declare(&'a str),
 }
 
 impl std::fmt::Debug for Act<'_> {
@@ -24,6 +25,7 @@ impl std::fmt::Debug for Act<'_> {
             Self::Unseal(_) => "Unseal(..)",
             Self::Seal => "Seal",
             Self::Change { .. } => "Change(..)",
+            Self::Declare(_) => "Declare(..)",
         })
     }
 }
@@ -62,6 +64,10 @@ pub(crate) fn body(act: &Act<'_>, place: Option<Place<'_>>) -> Vec<u8> {
             body.push(4);
             put_text(&mut body, current);
             put_text(&mut body, new);
+        }
+        Act::Declare(passphrase) => {
+            body.push(5);
+            put_text(&mut body, passphrase);
         }
     }
     body
