@@ -190,6 +190,14 @@ where
     }
 
     /// Send one vault frame (protocol §3.14) and read the status back.
+    /// Refuse before sending when the node greeted with a minor below `needed`.
+    pub(crate) fn requires_minor(&self, needed: u8) -> Result<()> {
+        match self.peer_minor {
+            Some(found) if found < needed => Err(Error::NodeTooOld { found, needed }),
+            _ => Ok(()),
+        }
+    }
+
     pub(crate) async fn vault_frame(&mut self, body: &[u8]) -> Result<Value> {
         if let Some(found) = self.peer_minor
             && found < VAULT_MINOR

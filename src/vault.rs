@@ -112,6 +112,9 @@ where
     }
 }
 
+/// The node minor at which the vault frame declares a vault (protocol §2.3).
+const DECLARE_MINOR: u8 = 6;
+
 /// One page of a vault's record ids.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
@@ -200,6 +203,20 @@ where
     /// As [`Client::unseal`].
     pub async fn change_passphrase(&mut self, current: &str, new: &str) -> Result<VaultStatus> {
         self.act(&Act::Change { current, new }).await
+    }
+
+    /// Declare this vault with its own passphrase, as `DEFINE VAULT … PASSPHRASE`
+    /// does, with the passphrase sent as a field of the frame rather than in a
+    /// script. The new vault is unsealed for the node's period.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NodeTooOld`] before sending to a node without the declare act
+    /// (protocol minor 6); the node's refusal for a name already taken or a
+    /// caller who may not manage the database.
+    pub async fn declare(&mut self, passphrase: &str) -> Result<VaultStatus> {
+        self.client.requires_minor(DECLARE_MINOR)?;
+        self.act(&Act::Declare(passphrase)).await
     }
 
     async fn act(&mut self, act: &Act<'_>) -> Result<VaultStatus> {
