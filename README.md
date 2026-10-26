@@ -355,6 +355,21 @@ expiring conditional write, never a delete, so a lease that lapsed cannot remove
 the next holder's lock. The statements are the protocol repository's
 `spec/cache-v1.md`, which every client follows.
 
+A key may also hold a list, a hash, a set of members or a ranking. Each call
+is still one statement, atomic per key, and a key that is not there reads as
+empty:
+
+```rust
+use tessaridb_client::End;
+
+cache.list_push("jobs", End::Back, vec![Value::from("a"), Value::from("b")]).await?;
+let next = cache.list_pop("jobs", End::Front).await?;
+cache.hash_set("user:1", vec![("name".to_owned(), Value::from("ada"))]).await?;
+cache.members_add("tags", vec![Value::from("new")]).await?;
+cache.scores_add("board", vec![("ada".to_owned(), 3.0), ("bob".to_owned(), 1.0)]).await?;
+let top = cache.scores_range("board", -3, -1).await?; // the three highest, lowest first
+```
+
 ## A vault, and its passphrase
 
 A vault (`DEFINE VAULT`) keeps `SECRET` fields encrypted in every copy that is not

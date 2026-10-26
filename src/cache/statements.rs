@@ -8,7 +8,11 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::query::{BuildError, check_name};
+
+mod containers;
 use crate::value::Value;
+pub(super) use containers::Bound;
+pub use containers::End;
 
 /// The most keys one listing may ask for (§2).
 pub(super) const MOST_KEYS: u32 = 1000;

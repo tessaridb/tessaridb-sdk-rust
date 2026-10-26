@@ -102,7 +102,7 @@ mod refusal;
 mod tls;
 mod vault;
 
-pub use crate::cache::{Lease, Space, Ttl};
+pub use crate::cache::{End, Lease, Space, Ttl};
 pub use crate::client::Client;
 pub use crate::consumer::{Consumer, Message, Settle, Stopper};
 pub use crate::error::{EncodingFault, Error, Result};
