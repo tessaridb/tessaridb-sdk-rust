@@ -1,4 +1,5 @@
-//! A space used as a cache, a counter and a lock — cache contract 1.0
+//! A space used as a cache, a counter and a lock, and a key holding a list, a
+//! hash, a set or a ranking — cache contract 1.1
 //! (`spec/cache-v1.md` in the protocol repository).
 //!
 //! A [`Space`] borrows a connection and sends one statement per call, with its
@@ -27,9 +28,11 @@ use crate::query::BuildError;
 use crate::value::{Number, Value};
 use crate::wire::message::Answer;
 
+mod containers;
 mod statements;
 
-use statements::{MOST_KEYS, Rendered, Statements, duration, unquoted};
+pub use statements::End;
+use statements::{MOST_KEYS, Statements, duration, unquoted};
 
 /// How long a key has left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,13 +325,19 @@ where
             .await
     }
 
-    async fn send(&mut self, (script, given): Rendered) -> Result<Vec<Answer>> {
+    async fn send<K: Into<String>>(
+        &mut self,
+        (script, given): (String, Vec<(K, Value)>),
+    ) -> Result<Vec<Answer>> {
         self.client.run_with(&script, None, given).await
     }
 
     /// The last answer's value — a statement that answers none (a plain `SET`)
     /// reads as `None`.
-    async fn value(&mut self, rendered: Rendered) -> Result<Value> {
+    async fn value<K: Into<String>>(
+        &mut self,
+        rendered: (String, Vec<(K, Value)>),
+    ) -> Result<Value> {
         match self.send(rendered).await?.pop() {
             Some(Answer::Value { value, .. }) => Ok(value),
             Some(Answer::Done) => Ok(Value::None),
@@ -336,7 +345,7 @@ where
         }
     }
 
-    async fn flag(&mut self, rendered: Rendered) -> Result<bool> {
+    async fn flag<K: Into<String>>(&mut self, rendered: (String, Vec<(K, Value)>)) -> Result<bool> {
         match self.value(rendered).await? {
             Value::Bool(held) => Ok(held),
             _ => Err(Error::Malformed),

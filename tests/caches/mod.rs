@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use tessaridb_client::{Client, Error, Lease, Space, Ttl, Value};
+use tessaridb_client::{Client, End, Error, Lease, Space, Ttl, Value};
 
 use super::Node;
 
@@ -199,4 +199,174 @@ async fn a_lease_is_extended_by_its_holder_and_released_so_the_next_can_take_it(
         panic!("the lock holds no holder")
     };
     assert_eq!(held, "next");
+}
+
+#[tokio::test]
+#[ignore = "needs TESSARIDB_BIN; see the module docs"]
+async fn a_key_holds_a_list() {
+    let (_node, mut client) = with_space().await;
+    let mut cache = Space::new(&mut client, ("app", "main"), "cache").unwrap();
+    let text = |items: &[&str]| {
+        items
+            .iter()
+            .map(|item| Value::from(*item))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        cache
+            .list_push("l", End::Back, text(&["a", "b", "c", "d"]))
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(cache.list_len("l").await.unwrap(), 4);
+    assert_eq!(
+        cache.list_at("l", -1).await.unwrap(),
+        Some(Value::from("d"))
+    );
+    assert_eq!(
+        cache.list_range("l", 1, 2).await.unwrap(),
+        text(&["b", "c"])
+    );
+    assert_eq!(
+        cache.list_pop("l", End::Front).await.unwrap(),
+        Some(Value::from("a"))
+    );
+    assert_eq!(
+        cache.list_pop_many("l", End::Back, 2).await.unwrap(),
+        text(&["d", "c"])
+    );
+    assert_eq!(
+        cache
+            .list_remove("l", Value::from("b"), None)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        cache.list_len("l").await.unwrap(),
+        0,
+        "an emptied list is no key"
+    );
+    assert_eq!(
+        cache.list_range("nothing", 0, 5).await.unwrap(),
+        Vec::<Value>::new()
+    );
+    cache
+        .list_push("t", End::Back, text(&["1", "2", "3"]))
+        .await
+        .unwrap();
+    cache.list_trim("t", 0, 1).await.unwrap();
+    assert_eq!(cache.list_len("t").await.unwrap(), 2);
+
+    assert!(matches!(
+        cache.list_push("l", End::Back, Vec::new()).await,
+        Err(Error::NotACacheArgument { .. })
+    ));
+    assert!(matches!(
+        cache.list_range("l", -1, 2).await,
+        Err(Error::NotACacheArgument { .. })
+    ));
+}
+
+#[tokio::test]
+#[ignore = "needs TESSARIDB_BIN; see the module docs"]
+async fn a_key_holds_a_hash() {
+    let (_node, mut client) = with_space().await;
+    let mut cache = Space::new(&mut client, ("app", "main"), "cache").unwrap();
+    assert_eq!(
+        cache
+            .hash_set(
+                "h",
+                vec![
+                    ("x".to_owned(), Value::from(1)),
+                    ("y".to_owned(), Value::from("why"))
+                ]
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        cache.hash_get("h", "y").await.unwrap(),
+        Some(Value::from("why"))
+    );
+    assert_eq!(cache.hash_get("h", "z").await.unwrap(), None);
+    assert_eq!(cache.hash_incr("h", "x", 4).await.unwrap(), 5);
+    assert_eq!(cache.hash_len("h").await.unwrap(), 2);
+    assert_eq!(
+        cache.hash_remove("h", vec!["y".to_owned()]).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        cache.hash_get_all("h").await.unwrap().get("x"),
+        Some(&Value::from(5))
+    );
+    assert!(cache.hash_get_all("nothing").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "needs TESSARIDB_BIN; see the module docs"]
+async fn a_key_holds_a_set_of_members() {
+    let (_node, mut client) = with_space().await;
+    let mut cache = Space::new(&mut client, ("app", "main"), "cache").unwrap();
+    let text = |items: &[&str]| {
+        items
+            .iter()
+            .map(|item| Value::from(*item))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(cache.members_add("s", text(&["p", "q"])).await.unwrap(), 2);
+    assert!(cache.members_has("s", Value::from("p")).await.unwrap());
+    assert!(
+        !cache
+            .members_has("nothing", Value::from("p"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(cache.members_len("s").await.unwrap(), 2);
+    assert_eq!(cache.members_remove("s", text(&["q"])).await.unwrap(), 1);
+    assert_eq!(cache.members_all("s").await.unwrap(), text(&["p"]));
+}
+
+#[tokio::test]
+#[ignore = "needs TESSARIDB_BIN; see the module docs"]
+async fn a_key_holds_a_ranking() {
+    let (_node, mut client) = with_space().await;
+    let mut cache = Space::new(&mut client, ("app", "main"), "cache").unwrap();
+    assert_eq!(
+        cache
+            .scores_add(
+                "r",
+                vec![
+                    ("ann".to_owned(), 3.0),
+                    ("bob".to_owned(), 1.0),
+                    ("cid".to_owned(), 2.0)
+                ]
+            )
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(cache.scores_incr("r", "bob", 0.5).await.unwrap(), 1.5);
+    assert_eq!(cache.scores_score("r", "ann").await.unwrap(), Some(3.0));
+    assert_eq!(cache.scores_rank("r", "ann").await.unwrap(), Some(2));
+    assert_eq!(cache.scores_rank("r", "eve").await.unwrap(), None);
+    assert_eq!(
+        cache.scores_range("r", 0, 1).await.unwrap(),
+        vec![("bob".to_owned(), 1.5), ("cid".to_owned(), 2.0)]
+    );
+    assert_eq!(
+        cache.scores_between("r", Some(2.0), None).await.unwrap(),
+        vec![("cid".to_owned(), 2.0), ("ann".to_owned(), 3.0)]
+    );
+    assert_eq!(
+        cache
+            .scores_remove("r", vec!["ann".to_owned()])
+            .await
+            .unwrap(),
+        1
+    );
 }
