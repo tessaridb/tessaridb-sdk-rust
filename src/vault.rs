@@ -21,11 +21,11 @@ use std::collections::BTreeMap;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::client::Client;
+use crate::client::{Client, KEYED_MINOR};
 use crate::error::{Error, Result};
 use crate::query::BuildError;
 use crate::value::Value;
-use crate::wire::message::Answer;
+use crate::wire::message::{Answer, Request, VaultKey};
 
 mod call;
 mod statements;
@@ -136,6 +136,9 @@ pub struct Vault<'c, S> {
     namespace: String,
     database: String,
     name: String,
+    /// The key this handle presents with every statement, for a vault in key
+    /// custody (protocol §3.4).
+    key: Option<VaultKey>,
 }
 
 impl<'c, S> Vault<'c, S>
@@ -159,7 +162,17 @@ where
             namespace: within.0.to_owned(),
             database: within.1.to_owned(),
             name: vault.to_owned(),
+            key: None,
         })
+    }
+
+    /// The same handle, presenting `key` with every statement it sends, for a
+    /// vault in key custody (protocol minor 7). Nothing on the node keeps the
+    /// key past the request that carried it.
+    #[must_use]
+    pub fn presenting(mut self, key: VaultKey) -> Self {
+        self.key = Some(key);
+        self
     }
 
     /// This vault's seal status, with [`VaultStatus::custody`] saying what opens
@@ -217,6 +230,34 @@ where
     pub async fn declare(&mut self, passphrase: &str) -> Result<VaultStatus> {
         self.client.requires_minor(DECLARE_MINOR)?;
         self.act(&Act::Declare(passphrase)).await
+    }
+
+    /// Declare this vault in key custody: its key is wrapped under `key`, which
+    /// opens it only for a request that presents it. It reports itself sealed,
+    /// because nothing on the node holds its key between requests.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NodeTooOld`] before sending to a node below minor 7; the node's
+    /// refusal for a name already taken or a caller who may not manage the
+    /// database.
+    pub async fn declare_keyed(&mut self, key: &VaultKey) -> Result<VaultStatus> {
+        self.client.requires_minor(KEYED_MINOR)?;
+        self.act(&Act::DeclareKeyed(key)).await
+    }
+
+    /// Wrap this keyed vault's key under `new`, after proving `current`. No
+    /// secret is re-encrypted, and a backup taken before still opens with
+    /// `current`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NodeTooOld`] before sending to a node below minor 7; the node's
+    /// refusal for a wrong `current` (throttled like a wrong passphrase) or a
+    /// vault that is not in key custody.
+    pub async fn change_key(&mut self, current: &VaultKey, new: &VaultKey) -> Result<VaultStatus> {
+        self.client.requires_minor(KEYED_MINOR)?;
+        self.act(&Act::ChangeKey { current, new }).await
     }
 
     async fn act(&mut self, act: &Act<'_>) -> Result<VaultStatus> {
@@ -340,7 +381,13 @@ where
     }
 
     async fn send(&mut self, (script, given): Rendered) -> Result<Vec<Answer>> {
-        self.client.run_with(&script, None, given).await
+        let Some(key) = &self.key else {
+            return self.client.run_with(&script, None, given).await;
+        };
+        let mut request = Request::new(script)
+            .presenting((&self.namespace, &self.database, &self.name), key.clone());
+        request.parameters.extend(given);
+        self.client.send(&request).await
     }
 
     async fn value(&mut self, rendered: Rendered) -> Result<Value> {

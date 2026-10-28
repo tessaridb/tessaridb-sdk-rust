@@ -173,6 +173,11 @@ where
 
     /// Send a request and read one reply, a redirect included.
     async fn exchange(&mut self, request: &Request) -> Result<Exchanged> {
+        // Here rather than in `send`, so a request followed to another node is
+        // judged against that node's minor too.
+        if !request.keys.is_empty() {
+            self.requires_minor(KEYED_MINOR)?;
+        }
         frame::write(&mut self.stream, Kind::Request, &request.encode()).await?;
         let Some((kind, body)) = frame::read(&mut self.stream).await? else {
             return Err(Error::Truncated);
@@ -254,6 +259,9 @@ where
 
 /// The node minor at which the vault frame exists (protocol §2.3).
 const VAULT_MINOR: u8 = 2;
+/// The node minor at which a request carries keys and the vault frame declares
+/// and re-keys a keyed vault (protocol §2.3).
+pub(crate) const KEYED_MINOR: u8 = 7;
 
 /// The node minor that reads a feed's condition (protocol §2.3, §3.7).
 const CONDITION_MINOR: u8 = 4;

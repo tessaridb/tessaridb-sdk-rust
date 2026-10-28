@@ -264,3 +264,90 @@ fn a_vaults_status_names_its_custody_from_a_closed_set() {
         "a custody outside the set was read"
     );
 }
+
+fn frames() -> Json {
+    let path = std::env::var("TESSARI_PROTOCOL_CONFORMANCE").map_or_else(
+        |_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tessaridb-protocol/conformance"),
+        PathBuf::from,
+    );
+    let path = path.join("frames-v1.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|why| panic!("the frames corpus is required at {}: {why}", path.display()));
+    serde_json::from_str(&raw).unwrap()
+}
+
+fn key_from(json: &Json, field: &str) -> crate::wire::message::VaultKey {
+    let bytes: Vec<u8> = json[field]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    crate::wire::message::VaultKey::new(bytes.try_into().unwrap())
+}
+
+#[test]
+fn every_keyed_act_is_the_body_the_frames_corpus_names() {
+    let corpus = frames();
+    let mut checked = 0_usize;
+    for case in corpus["keyed"].as_array().unwrap() {
+        let want = &case["decoded"];
+        let Some(act) = want.get("act").and_then(Json::as_str) else {
+            continue;
+        };
+        let place = Place {
+            namespace: want["namespace"].as_str().unwrap(),
+            database: want["database"].as_str().unwrap(),
+            vault: want["vault"].as_str().unwrap(),
+        };
+        let written = match act {
+            "declare-keyed" => body(&Act::DeclareKeyed(&key_from(want, "key_hex")), Some(place)),
+            "change-key" => body(
+                &Act::ChangeKey {
+                    current: &key_from(want, "current_hex"),
+                    new: &key_from(want, "new_hex"),
+                },
+                Some(place),
+            ),
+            other => panic!("an act the corpus does not define: {other}"),
+        };
+        assert_eq!(hex(&written), text(case, "body_hex"), "{}", case["name"]);
+        checked += 1;
+    }
+    assert_eq!(checked, 2, "both keyed acts are in the corpus");
+}
+
+#[test]
+fn a_keyed_vault_reports_key_custody() {
+    let mut fields = BTreeMap::new();
+    fields.insert("state".to_owned(), Value::String("sealed".to_owned()));
+    fields.insert(
+        "unseal_for".to_owned(),
+        Value::Duration {
+            seconds: 600,
+            nanos: 0,
+        },
+    );
+    fields.insert("custody".to_owned(), Value::String("key".to_owned()));
+    let status = VaultStatus::from_value(Value::Object(fields)).unwrap();
+    assert_eq!(status.custody, Some(Custody::Key));
+    assert_eq!(status.state, SealState::Sealed);
+}
+
+#[test]
+fn a_key_is_never_printed() {
+    let key = crate::wire::message::VaultKey::new([0x5a; 32]);
+    let request = crate::wire::message::Request::new("RETURN 1;")
+        .presenting(("prod", "work", "team"), key.clone());
+    for rendered in [
+        format!("{key:?}"),
+        format!("{request:?}"),
+        format!("{:?}", Act::DeclareKeyed(&key)),
+    ] {
+        assert!(
+            !rendered.contains("90") && !rendered.contains("5a"),
+            "{rendered}"
+        );
+    }
+}

@@ -400,6 +400,14 @@ vault with the passphrase sent as a field rather than in a script (a node from
 after a run of wrong passphrases means **wait**, and is not retried here. The
 statements and frames are the protocol repository's `spec/vault-v1.md`.
 
+A vault in **key custody** opens only for a request that carries its 256-bit key,
+and the node keeps the key for that request alone. `vault.declare_keyed(&key)`
+declares one, `vault.change_key(&current, &new)` re-keys it, and
+`Vault::new(…)?.presenting(key)` gives a handle whose every statement carries the
+key; without it the vault answers sealed. A `VaultKey` is never printed and is
+wiped when dropped. Keys and both acts are sent only to a node that announces
+protocol minor 7, and refused here with `NodeTooOld` otherwise.
+
 ## What it does not own
 
 **The language.** Statements are TessariQL. This SDK does not invent a second way to
