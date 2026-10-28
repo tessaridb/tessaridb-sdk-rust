@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use crate::error::{Error, Result};
 use crate::value::Value;
 use crate::wire::frame::put_text;
+use crate::wire::message::VaultKey;
 
 /// One act on the vault, as the frame carries it.
 ///
@@ -14,8 +15,16 @@ pub(crate) enum Act<'a> {
     Status,
     Unseal(&'a str),
     Seal,
-    Change { current: &'a str, new: &'a str },
+    Change {
+        current: &'a str,
+        new: &'a str,
+    },
     Declare(&'a str),
+    DeclareKeyed(&'a VaultKey),
+    ChangeKey {
+        current: &'a VaultKey,
+        new: &'a VaultKey,
+    },
 }
 
 impl std::fmt::Debug for Act<'_> {
@@ -26,6 +35,8 @@ impl std::fmt::Debug for Act<'_> {
             Self::Seal => "Seal",
             Self::Change { .. } => "Change(..)",
             Self::Declare(_) => "Declare(..)",
+            Self::DeclareKeyed(_) => "DeclareKeyed(..)",
+            Self::ChangeKey { .. } => "ChangeKey(..)",
         })
     }
 }
@@ -69,6 +80,15 @@ pub(crate) fn body(act: &Act<'_>, place: Option<Place<'_>>) -> Vec<u8> {
             body.push(5);
             put_text(&mut body, passphrase);
         }
+        Act::DeclareKeyed(key) => {
+            body.push(6);
+            body.extend_from_slice(key.expose());
+        }
+        Act::ChangeKey { current, new } => {
+            body.push(7);
+            body.extend_from_slice(current.expose());
+            body.extend_from_slice(new.expose());
+        }
     }
     body
 }
@@ -84,11 +104,16 @@ pub enum SealState {
     Unsealed,
 }
 
-/// What opens a vault: its own passphrase, or the store's.
+/// What opens a vault: its own passphrase, a key presented with each request,
+/// or the store's passphrase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Custody {
     /// The vault's own passphrase; the store's opens nothing in it.
     Own,
+    /// A key the caller presents with every request that opens it (protocol
+    /// §3.14, minor 7). Such a vault always reports itself sealed: nothing on
+    /// the node holds its key between requests.
+    Key,
     /// The store's passphrase, as for every vault declared without one. The
     /// state reported beside it is the store's.
     Store,
@@ -144,6 +169,7 @@ impl VaultStatus {
             None => None,
             Some(Value::String(custody)) => match custody.as_str() {
                 "own" => Some(Custody::Own),
+                "key" => Some(Custody::Key),
                 "store" => Some(Custody::Store),
                 _ => return Err(Error::Malformed),
             },

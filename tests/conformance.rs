@@ -202,3 +202,45 @@ fn every_progress_vector_decodes_exactly_or_is_refused() {
         );
     }
 }
+
+/// `frames-v1.json`, key `keyed`: every Request case (protocol §3.4 from minor
+/// 7) is exactly the body this client writes for its script and keys. This
+/// client never asks for a streamed snapshot, so a case that does is another
+/// client's to check.
+#[test]
+fn every_keyed_request_vector_is_the_body_this_client_writes() {
+    let corpus = read_corpus("frames-v1.json");
+    let cases = corpus["keyed"].as_array().expect("a keyed list");
+    let mut checked = 0_usize;
+    for case in cases {
+        let want = &case["decoded"];
+        if case.get("malformed").is_some() || want.get("keys").is_none() || want["stream"] == true {
+            continue;
+        }
+        let mut request = tessaridb_client::Request::new(want["script"].as_str().unwrap());
+        for key in want["keys"].as_array().unwrap() {
+            let bytes: [u8; 32] = hex_to_bytes(key["key_hex"].as_str().unwrap())
+                .try_into()
+                .unwrap();
+            request = request.presenting(
+                (
+                    key["namespace"].as_str().unwrap(),
+                    key["database"].as_str().unwrap(),
+                    key["vault"].as_str().unwrap(),
+                ),
+                tessaridb_client::VaultKey::new(bytes),
+            );
+        }
+        assert_eq!(
+            request.encode(),
+            hex_to_bytes(case["body_hex"].as_str().unwrap()),
+            "{}",
+            case["name"]
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 1,
+        "the corpus holds a keyed request this client can send"
+    );
+}

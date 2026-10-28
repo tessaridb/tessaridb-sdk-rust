@@ -36,6 +36,55 @@ pub struct Request {
     /// else, and binding after parsing exists to make that impossible — undoing
     /// it at the wire would be a strange place to give it back.
     pub parameters: Parameters,
+    /// Keys that open vaults in key custody for this request alone (protocol
+    /// §3.4, minor 7). Never part of the script and never a parameter.
+    pub keys: Vec<PresentedKey>,
+}
+
+/// A 256-bit key that opens one vault in key custody (protocol §3.14).
+///
+/// The bytes are reachable only through [`VaultKey::expose`], are never
+/// printed, and are wiped when the value is dropped.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VaultKey([u8; 32]);
+
+impl VaultKey {
+    /// A key from its 32 bytes.
+    #[must_use]
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The key's bytes, for the one place that has to send them.
+    #[must_use]
+    pub const fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl Drop for VaultKey {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
+impl std::fmt::Debug for VaultKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VaultKey(..)")
+    }
+}
+
+/// One key a request presents, and the vault it opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentedKey {
+    /// The vault's namespace.
+    pub namespace: String,
+    /// The vault's database.
+    pub database: String,
+    /// The vault.
+    pub vault: String,
+    /// The key that opens it.
+    pub key: VaultKey,
 }
 
 /// Written by hand rather than derived, because the derived one prints the
@@ -58,6 +107,7 @@ impl std::fmt::Debug for Request {
                     .map_or("nobody", |(name, _)| name.as_str()),
             )
             .field("parameters", &self.parameters.keys())
+            .field("keys", &self.keys)
             .finish_non_exhaustive()
     }
 }
@@ -70,6 +120,7 @@ impl Request {
             script: script.into(),
             credentials: None,
             parameters: Parameters::new(),
+            keys: Vec::new(),
         }
     }
 
@@ -87,6 +138,21 @@ impl Request {
     #[must_use]
     pub fn bind(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
         self.parameters.insert(name.into(), value.into());
+        self
+    }
+
+    /// The same request presenting `key` for one vault (protocol §3.4, minor 7).
+    ///
+    /// The client refuses to send it to a node below minor 7, which would read
+    /// past the keys and run the script without them.
+    #[must_use]
+    pub fn presenting(mut self, place: (&str, &str, &str), key: VaultKey) -> Self {
+        self.keys.push(PresentedKey {
+            namespace: place.0.to_owned(),
+            database: place.1.to_owned(),
+            vault: place.2.to_owned(),
+            key,
+        });
         self
     }
 
@@ -110,6 +176,21 @@ impl Request {
         for (name, value) in &self.parameters {
             put_text(&mut body, name);
             put_bytes(&mut body, &encode(value));
+        }
+        // From minor 7 the keys follow the stream byte, which is written as 0
+        // because this client never asks for a streamed snapshot.
+        if !self.keys.is_empty() {
+            body.push(0);
+            put_u32(
+                &mut body,
+                u32::try_from(self.keys.len()).unwrap_or(u32::MAX),
+            );
+            for presented in &self.keys {
+                put_text(&mut body, &presented.namespace);
+                put_text(&mut body, &presented.database);
+                put_text(&mut body, &presented.vault);
+                body.extend_from_slice(presented.key.expose());
+            }
         }
         body
     }

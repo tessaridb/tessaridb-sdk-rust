@@ -679,3 +679,66 @@ async fn a_condition_is_not_sent_to_a_node_before_minor_four() {
         .unwrap();
     assert!(sent.is_empty(), "the client sent a frame the node misreads");
 }
+
+#[tokio::test]
+async fn keys_are_not_sent_to_a_node_before_minor_seven() {
+    use tessaridb_client::{Request, Vault, VaultKey};
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let older = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut greeting = [0_u8; 6];
+        socket.read_exact(&mut greeting).await.unwrap();
+        socket.write_all(b"TESS\x01\x06").await.unwrap();
+        // An older node reads past the keys and runs the script without them.
+        // Its write half is closed, so a client that sent anyway reads the end
+        // of the stream instead of waiting for an answer.
+        socket.shutdown().await.unwrap();
+        let mut after = Vec::new();
+        socket.read_to_end(&mut after).await.unwrap();
+        after
+    });
+    let bound = std::time::Duration::from_secs(10);
+    let mut client = tokio::time::timeout(bound, Client::connect(address))
+        .await
+        .expect("connecting took longer than the bound")
+        .unwrap();
+    let too_old = |refused: &Error| {
+        matches!(
+            refused,
+            Error::NodeTooOld {
+                found: 6,
+                needed: 7
+            }
+        )
+    };
+    let key = VaultKey::new([0x5a; 32]);
+    let refused = client
+        .send(&Request::new("RETURN 1;").presenting(("prod", "work", "team"), key.clone()))
+        .await
+        .unwrap_err();
+    assert!(too_old(&refused), "{refused:?}");
+    let mut team = Vault::new(&mut client, ("prod", "work"), "team").unwrap();
+    let refused = team.declare_keyed(&key).await.unwrap_err();
+    assert!(too_old(&refused), "{refused:?}");
+    let refused = team
+        .change_key(&key, &VaultKey::new([0x6b; 32]))
+        .await
+        .unwrap_err();
+    assert!(too_old(&refused), "{refused:?}");
+    let mut team = team.presenting(key);
+    let refused = team.reveal("github", &["token"]).await.unwrap_err();
+    assert!(too_old(&refused), "{refused:?}");
+    drop(team);
+    drop(client);
+    let sent = tokio::time::timeout(bound, older)
+        .await
+        .expect("the fake node never saw the connection close")
+        .unwrap();
+    assert!(
+        sent.is_empty(),
+        "the client sent keys to a node that misreads them"
+    );
+}

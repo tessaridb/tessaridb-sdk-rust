@@ -290,3 +290,86 @@ async fn a_node_without_the_declare_act_is_refused_before_anything_is_sent() {
         "the client sent an act the node cannot read"
     );
 }
+
+/// A vault in key custody (protocol §3.14, minor 7): declared with a key,
+/// written and revealed only by a handle that presents it, refused without it,
+/// and re-keyed so the old key opens nothing.
+#[tokio::test]
+#[ignore = "needs TESSARIDB_BIN; see the module docs"]
+async fn a_keyed_vault_opens_only_for_a_request_that_presents_its_key() {
+    use tessaridb_client::VaultKey;
+    let node = Node::start().await;
+    let mut client = node.client().await;
+    client
+        .run(
+            "DEFINE NAMESPACE app; USE NAMESPACE app; DEFINE DATABASE main;",
+            None,
+        )
+        .await
+        .unwrap();
+    let key = VaultKey::new([0x5a; 32]);
+    let next = VaultKey::new([0x6b; 32]);
+
+    let declared = Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .declare_keyed(&key)
+        .await
+        .unwrap();
+    assert_eq!(declared.custody, Some(Custody::Key));
+    assert_eq!(declared.state, SealState::Sealed);
+    client
+        .run(
+            "USE NAMESPACE app; USE DATABASE main; DEFINE FIELD token ON keyed TYPE string SECRET;",
+            None,
+        )
+        .await
+        .unwrap();
+
+    let mut opened = Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .presenting(key.clone());
+    opened
+        .write("github", &fields(&[("token", PLANTED)]))
+        .await
+        .unwrap();
+    let revealed = opened.reveal("github", &["token"]).await.unwrap();
+    assert_eq!(
+        revealed.get("token"),
+        Some(&Value::String(PLANTED.to_owned()))
+    );
+
+    let refused = Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .reveal("github", &["token"])
+        .await
+        .unwrap_err();
+    assert!(shown(&refused).contains("sealed"), "{}", shown(&refused));
+    assert!(!shown(&refused).contains(PLANTED));
+
+    Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .change_key(&key, &next)
+        .await
+        .unwrap();
+    let reopened = Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .presenting(next)
+        .reveal("github", &["token"])
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.get("token"),
+        Some(&Value::String(PLANTED.to_owned()))
+    );
+    let refused = Vault::new(&mut client, ("app", "main"), "keyed")
+        .unwrap()
+        .presenting(key)
+        .reveal("github", &["token"])
+        .await
+        .unwrap_err();
+    assert!(
+        shown(&refused).contains("the key is wrong"),
+        "{}",
+        shown(&refused)
+    );
+}

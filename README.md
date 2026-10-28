@@ -52,7 +52,8 @@ What has to match is the **protocol**. This release speaks **protocol 1.4** — 
 reads the redirect frame of minor 1 and the refusal class of minor 3, sends
 the vault frame of minor 2 only to a node that announces minor 2 (node `0.17.0-beta` and later), and sends a feed's
 condition and reads the progress frame of minor 4 only with a node that announces minor 4 (node `0.33.0-beta` and
-later) — and
+later), declares a vault with its own passphrase (minor 6) and presents a vault's key (minor 7, node `0.39.3` and
+later) only to a node that announces them — and
 connects to any node of protocol **major 1**, which is checked in the greeting
 before anything else is sent — a differing major is refused there rather than
 discovered mid-conversation, where it arrives as a decode failure that reads
@@ -83,7 +84,7 @@ A class this build does not know reads as `unknown`, which is not retriable.
 - ⚠️ **Unstable:** the public API changes without notice while the server it
   talks to is pre-1.0.
 
-It implements **protocol 1.4**: a two-number version where only a differing
+It announces **protocol 1.4** and sends the frames of minors 6 and 7 to a node that announces them: a two-number version where only a differing
 major is a refusal, and an outcome kind this build has never seen is stepped over
 by its length rather than ending the read.
 
@@ -399,6 +400,14 @@ vault with the passphrase sent as a field rather than in a script (a node from
 (ten minutes unless it was started otherwise) and then closes by itself; a refusal
 after a run of wrong passphrases means **wait**, and is not retried here. The
 statements and frames are the protocol repository's `spec/vault-v1.md`.
+
+A vault in **key custody** opens only for a request that carries its 256-bit key,
+and the node keeps the key for that request alone. `vault.declare_keyed(&key)`
+declares one, `vault.change_key(&current, &new)` re-keys it, and
+`Vault::new(…)?.presenting(key)` gives a handle whose every statement carries the
+key; without it the vault answers sealed. A `VaultKey` is never printed and is
+wiped when dropped. Keys and both acts are sent only to a node that announces
+protocol minor 7, and refused here with `NodeTooOld` otherwise.
 
 ## What it does not own
 
