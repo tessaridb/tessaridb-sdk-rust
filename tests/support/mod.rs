@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use serde_json::Value as Json;
 use tessaridb_client::query::{
-    Answerer, BuildError, Create, Delete, Filter, Order, Query, Select, Update, field,
+    Answerer, BuildError, Create, DefineTable, Delete, Filter, Order, Query, Select, Update, field,
 };
 use tessaridb_client::{
     Geometry, Number, Parameters, Polygon, Position, RecordId, RecordRef, Ring, Value, ValueRange,
@@ -405,6 +405,27 @@ pub fn build(json: &Json) -> Result<Query, BuildError> {
             value_of(&held["id"]),
         )
         .build(),
+        "define_table" => {
+            // §4.11: the one definition the builder carries. Every position
+            // names a thing and the count is the statement's shape, so the
+            // dispatch threads the builder's own refusals through unchanged.
+            let mut define = DefineTable::named(held["table"].as_str().expect("a table"));
+            if let Some(columns) = held.get("columns").and_then(Json::as_object) {
+                for (name, kind) in columns {
+                    define = define.column(name, kind.as_str().expect("a type word"));
+                }
+            }
+            if let Some(word) = held.get("store").and_then(Json::as_str) {
+                define = define.store(word)?;
+            }
+            if let Some(partitions) = held.get("partitions") {
+                define = define.partitions(
+                    partitions["count"].as_u64().unwrap_or(0),
+                    partitions["by"].as_str().expect("a field"),
+                )?;
+            }
+            define.build()
+        }
         other => panic!("the corpus names a statement this builder has not: {other}"),
     }
 }

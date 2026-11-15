@@ -42,6 +42,9 @@ fn refusal_reason(error: &BuildError) -> &'static str {
         BuildError::Incomplete { .. } => "incomplete",
         BuildError::NotASpan { .. } => "not-a-span",
         BuildError::NotAnAnswerer { .. } => "not-an-answerer",
+        BuildError::NotAStoreKind { .. } => "not-a-store-kind",
+        BuildError::NotAPartitionCount { .. } => "not-a-partition-count",
+        BuildError::PartitionsWithoutStore => "partitions-without-store",
         // `BuildError` is non-exhaustive, so this arm is required. It panics
         // rather than guessing: contract §5 says a builder reports these two
         // reasons and must not add one the document does not describe, so a

@@ -44,10 +44,12 @@
 //! `DELETE` on one record or one table. Anything else is written by hand and sent
 //! as a script, which is always available and always the fallback.
 
+mod define;
 mod filter;
 mod select;
 mod write;
 
+pub use crate::query::define::{DefineTable, StoreKind};
 pub use crate::query::filter::{Filter, field};
 pub use crate::query::select::{Order, Select};
 pub use crate::query::write::{Create, Delete, Update};
@@ -143,6 +145,24 @@ pub enum BuildError {
         /// What was supplied.
         name: String,
     },
+
+    /// A storage layout word that is neither `row` nor `column` (contract §4.11).
+    #[error("{name:?} is not a store kind: write row or column")]
+    NotAStoreKind {
+        /// What was supplied.
+        name: String,
+    },
+
+    /// A partition count that is not an integer of at least one (contract §4.11).
+    #[error("{name} is not a partition count: write a whole number from 1 up")]
+    NotAPartitionCount {
+        /// What was supplied.
+        name: String,
+    },
+
+    /// `PARTITIONS` asked beside a store other than `column` (contract §4.11).
+    #[error("partitions ride only a column store: write store: column beside partitions")]
+    PartitionsWithoutStore,
 }
 
 /// Where a read's answer must come from.
